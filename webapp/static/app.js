@@ -3,6 +3,15 @@
 const state = { jobs: [], trash: [], statuses: [], filter: "all", selectedId: null };
 
 const $ = (sel, root = document) => root.querySelector(sel);
+
+/* Reveal job cards as they enter view (vanilla, dependency-free). */
+const revealObserver = ("IntersectionObserver" in window)
+  ? new IntersectionObserver((entries, obs) => {
+      for (const e of entries) {
+        if (e.isIntersecting) { e.target.classList.add("in"); obs.unobserve(e.target); }
+      }
+    }, { rootMargin: "0px 0px -8% 0px" })
+  : null;
 const api = {
   async get(path) { const r = await fetch(path); if (!r.ok) throw await err(r); return r.json(); },
   async send(method, path, body) {
@@ -93,9 +102,10 @@ function renderList() {
     (j) => state.filter === "all" || j.status === state.filter
   );
   $("#empty-list").hidden = state.jobs.length !== 0;
-  for (const j of jobs) {
+  jobs.forEach((j, i) => {
     const li = document.createElement("li");
-    li.className = "job-card" + (j.id === state.selectedId ? " selected" : "");
+    li.className = "job-card reveal" + (j.id === state.selectedId ? " selected" : "");
+    li.style.transitionDelay = Math.min(i * 40, 320) + "ms";
     li.onclick = () => selectJob(j.id);
     li.innerHTML = `
       <h3>${esc(j.title || "Untitled role")}</h3>
@@ -106,7 +116,8 @@ function renderList() {
         <span class="source-tag">${esc(j.source || "")}</span>
       </div>`;
     ul.appendChild(li);
-  }
+    if (revealObserver) revealObserver.observe(li); else li.classList.add("in");
+  });
 }
 
 function renderTrash(ul) {

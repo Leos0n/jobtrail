@@ -4,63 +4,74 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>JobTrail — job application tracker</title>
+  <link rel="preconnect" href="https://api.fontshare.com" crossorigin />
+  <link rel="stylesheet"
+        href="https://api.fontshare.com/v2/css?f[]=cabinet-grotesk@500,700,800&f[]=satoshi@400,500,700&display=swap" />
   <link rel="stylesheet" href="/static/styles.css" />
 </head>
 <body>
-  <header class="topbar">
-    <div class="brand">
-      <span class="mark">●</span>
-      <div>
-        <h1>JobTrail</h1>
-        <p class="tagline">Paste an Indeed or LinkedIn link — track every application in one place.</p>
+  <div class="page">
+    <header class="topbar">
+      <div class="brand">
+        <span class="mark" aria-hidden="true"></span>
+        <div class="brand-text">
+          <h1>JobTrail</h1>
+          <p class="tagline">Every application — parsed, tracked, and never lost.</p>
+        </div>
+      </div>
+      <form id="add-form" class="add-form" autocomplete="off">
+        <div class="add-field">
+          <span class="add-hint" aria-hidden="true">Indeed · LinkedIn</span>
+          <input id="add-url" type="url"
+                 placeholder="Paste a job link to track it…" aria-label="Job URL" />
+        </div>
+        <button id="add-btn" type="submit">Add job</button>
+      </form>
+    </header>
+
+    <div id="toast" class="toast" hidden></div>
+
+    <div class="subbar">
+      <nav class="filters" id="filters" aria-label="Filter by status"></nav>
+      <div class="toolbar">
+        <span class="backup-status" id="backup-status"></span>
+        <button id="trash-btn" class="btn-ghost">Trash <span class="count" id="trash-count">0</span></button>
+        <button id="export-btn" class="btn-ghost">Export</button>
+        <label class="btn-ghost import-label">Import
+          <input type="file" id="import-file" accept="application/json,.json" hidden />
+        </label>
+        <button id="backup-btn" class="btn-ghost">Back up</button>
       </div>
     </div>
-    <form id="add-form" class="add-form" autocomplete="off">
-      <input id="add-url" type="url" placeholder="https://www.indeed.com/viewjob?jk=…  or  linkedin.com/jobs/view/…" />
-      <button id="add-btn" type="submit">Add job</button>
-    </form>
-  </header>
 
-  <div id="toast" class="toast" hidden></div>
+    <main class="layout">
+      <section class="list-pane">
+        <ul id="job-list" class="job-list"></ul>
+        <div id="empty-list" class="empty-list" hidden>
+          <span class="empty-mark" aria-hidden="true"></span>
+          <p class="empty-title">No jobs yet</p>
+          <p class="muted">Paste an Indeed or LinkedIn link above to start your trail.</p>
+        </div>
+      </section>
 
-  <div class="subbar">
-    <nav class="filters" id="filters"></nav>
-    <div class="toolbar">
-      <span class="backup-status" id="backup-status"></span>
-      <button id="trash-btn" class="btn-ghost">Trash <span class="count" id="trash-count">0</span></button>
-      <button id="export-btn" class="btn-ghost">Export backup</button>
-      <label class="btn-ghost import-label">Import
-        <input type="file" id="import-file" accept="application/json,.json" hidden />
-      </label>
-      <button id="backup-btn" class="btn-ghost">Back up now</button>
-    </div>
+      <section class="detail-pane" id="detail-pane">
+        <div class="detail-empty" id="detail-empty">
+          <span class="empty-mark" aria-hidden="true"></span>
+          <p class="muted">Select a job to view and edit its details.</p>
+        </div>
+        <div class="detail" id="detail" hidden></div>
+      </section>
+    </main>
   </div>
-
-  <main class="layout">
-    <section class="list-pane">
-      <ul id="job-list" class="job-list"></ul>
-      <div id="empty-list" class="empty-list" hidden>
-        <p>No jobs yet.</p>
-        <p class="muted">Paste a job link above to get started.</p>
-      </div>
-    </section>
-
-    <section class="detail-pane" id="detail-pane">
-      <div class="detail-empty" id="detail-empty">
-        <p class="muted">Select a job to see and edit its details.</p>
-      </div>
-      <div class="detail" id="detail" hidden></div>
-    </section>
-  </main>
 
   <template id="detail-template">
     <div class="detail-head">
-      <div>
+      <div class="detail-headings">
         <h2 class="d-title"></h2>
         <p class="d-company"></p>
       </div>
       <div class="detail-actions">
-        <a class="d-source btn-ghost" target="_blank" rel="noopener">Open original ↗</a>
+        <a class="d-source btn-ghost" target="_blank" rel="noopener">Open original</a>
         <button class="d-md btn-ghost">Markdown</button>
         <button class="d-delete btn-danger">Delete</button>
       </div>
@@ -68,6 +79,7 @@
 
     <div class="d-meta chips"></div>
 
+    <div class="section-label">Application</div>
     <div class="tracker">
       <div class="field">
         <label>Status</label>
@@ -95,6 +107,7 @@
       </div>
     </div>
 
+    <div class="section-label">Documents</div>
     <div class="files">
       <div class="file-slot" data-kind="resume">
         <label>Resume</label>
@@ -106,7 +119,7 @@
       </div>
     </div>
 
-    <div class="field">
+    <div class="field notes-field">
       <label>Notes</label>
       <textarea class="d-notes" rows="4" placeholder="Application notes, interview prep, links…"></textarea>
     </div>
