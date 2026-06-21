@@ -1,0 +1,5 @@
+# One Indeed job URL per line. Blank lines and '#' comments are ignored.
+# Accepts viewjob, vjk, rc/clk and country-subdomain links.
+# https://www.indeed.com/viewjob?jk=REPLACE_WITH_JOB_KEY
+# https://uk.indeed.com/viewjob?jk=ANOTHER_JOB_KEY
+# https://www.indeed.com/q-software-engineer-jobs.html?vjk=YET_ANOTHER_KEY

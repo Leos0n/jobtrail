@@ -1,0 +1,15 @@
+#!/usr/bin/env python3
+"""Thin launcher so the tool runs from anywhere without installing.
+
+Usage: ./bin/indeed-cli <args>   (or put this dir on your PATH)
+"""
+import os
+import sys
+
+# Make the package importable when run directly from the repo.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from indeed_cli.cli import main  # noqa: E402
+
+if __name__ == "__main__":
+    raise SystemExit(main())

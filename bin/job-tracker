@@ -1,0 +1,33 @@
+#!/usr/bin/env python3
+"""Launch the JobTrail web UI.
+
+Usage:
+    ./bin/job-tracker            # serve on http://127.0.0.1:8765
+    ./bin/job-tracker --port 9000
+"""
+import argparse
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from webapp.server import serve  # noqa: E402
+
+
+def main():
+    ap = argparse.ArgumentParser(description="Run the JobTrail job tracker UI.")
+    ap.add_argument("--host", default="127.0.0.1", help="Bind host (default loopback).")
+    ap.add_argument("--port", type=int, default=8765, help="Port (default 8765).")
+    ap.add_argument("--db", default=None, help="Path to the SQLite database file.")
+    ap.add_argument(
+        "--backup-dir",
+        default=None,
+        help="Where to store backups (default: data/backups; point outside the "
+        "repo, e.g. a cloud-synced folder, for off-machine safety).",
+    )
+    args = ap.parse_args()
+    serve(host=args.host, port=args.port, db_path=args.db, backups_dir=args.backup_dir)
+
+
+if __name__ == "__main__":
+    main()
