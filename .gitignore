@@ -13,3 +13,6 @@ venv/
 
 # OS
 .DS_Store
+
+# Private, machine-local extensions (never published)
+private/
