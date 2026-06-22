@@ -292,7 +292,12 @@ async function removeFile(id, kind) { try { const u = await api.send("DELETE", `
 
 /* ---------------- Data menu ---------------- */
 function toggleMenu(open) { const m = $("#data-menu"); const show = open ?? m.hidden; m.hidden = !show; $("#data-btn").setAttribute("aria-expanded", String(show)); }
-function exportBackup() { window.open("/api/export", "_blank"); }
+function exportBackup() {
+  const a = document.createElement("a");
+  a.href = "/api/export"; a.rel = "noopener";
+  document.body.appendChild(a); a.click(); a.remove();
+  toast("Notebook exported.");
+}
 async function backupNow() { try { await api.send("POST", "/api/backup", {}); loadBackupStatus(); toast("Backup saved."); } catch (err) { toast(err.message, true); } }
 function importBackup(file) {
   const r = new FileReader();
@@ -349,7 +354,7 @@ function boot() {
     const act = item.dataset.act;
     if (act === "backup") backupNow(); else if (act === "export") exportBackup(); else if (act === "trash") openTrash();
   });
-  $("#import-file").addEventListener("change", (ev) => { if (ev.target.files[0]) { importBackup(ev.target.files[0]); ev.target.value = ""; } });
+  $("#import-file").addEventListener("change", (ev) => { if (ev.target.files[0]) { importBackup(ev.target.files[0]); ev.target.value = ""; toggleMenu(false); } });
 
   $("#cal-prev").addEventListener("click", () => { state.calCursor = new Date(state.calCursor.getFullYear(), state.calCursor.getMonth() - 1, 1); renderCalendar(); });
   $("#cal-next").addEventListener("click", () => { state.calCursor = new Date(state.calCursor.getFullYear(), state.calCursor.getMonth() + 1, 1); renderCalendar(); });
