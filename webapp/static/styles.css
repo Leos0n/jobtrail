@@ -196,7 +196,8 @@ body {
 .cal-cell:nth-child(7n+1) { border-left: none; }
 .cal-grid > .cal-dow { border-top: none; }
 .cal-cell.dow-row { display: contents; }
-.cal-daynum { font-size: 13px; color: var(--muted); }
+.cal-daynum { font-size: 13px; color: var(--muted); cursor: pointer; }
+.cal-daynum:hover { color: var(--accent); }
 .cal-cell.out .cal-daynum { color: var(--faint); }
 .cal-cell.today .cal-daynum { background: var(--accent); color: #fff; width: 26px; height: 26px; border-radius: 50%; display: inline-grid; place-items: center; font-weight: 600; }
 .cal-event { margin-top: 7px; background: var(--accent-tint); border-radius: 7px; padding: 5px 8px; cursor: pointer; font-size: 11.5px; line-height: 1.3; }
@@ -208,12 +209,21 @@ body {
 .up-day { font-size: 12px; color: var(--ink); font-weight: 600; margin: 12px 0 6px; }
 .cal-week { display: grid; grid-template-columns: repeat(7, 1fr); gap: 10px; }
 .cal-week .wk-col { border: 1px solid var(--hairline); border-radius: var(--r-md); min-height: 220px; padding: 10px; }
-.cal-week .wk-head { font-size: 12px; color: var(--muted); margin-bottom: 8px; }
+.cal-week .wk-head { font-size: 12px; color: var(--muted); margin-bottom: 8px; cursor: pointer; }
+.cal-week .wk-head:hover { color: var(--accent); }
 .cal-week .wk-head .wk-num { font-weight: 600; color: var(--ink); }
 .cal-week .wk-head.today .wk-num { color: var(--accent); }
 .cal-listview .li-row { display: flex; gap: 14px; padding: 14px 6px; border-top: 1px solid var(--hairline); cursor: pointer; }
 .cal-listview .li-row:first-child { border-top: none; }
 .cal-listview .li-date { width: 120px; color: var(--muted); font-size: 13.5px; flex: none; }
+.cal-dayview .day-summary { font-size: 13px; color: var(--muted); margin-bottom: 14px; }
+.cal-dayview .day-job-row {
+  display: flex; align-items: center; gap: 12px; width: 100%; text-align: left;
+  background: var(--surface); border: 1px solid var(--hairline); border-radius: var(--r-md);
+  padding: 14px 16px; cursor: pointer; margin-bottom: 10px; transition: border-color .14s var(--ease);
+}
+.cal-dayview .day-job-row:hover { border-color: var(--accent); }
+.cal-dayview .day-job-row .chev { margin-left: auto; color: var(--faint); }
 
 /* ---------------- Footer ---------------- */
 .footer { max-width: 1180px; margin: 8px auto 0; padding: 26px 36px 40px; display: flex; align-items: center; justify-content: space-between; border-top: 1px solid var(--hairline); }
