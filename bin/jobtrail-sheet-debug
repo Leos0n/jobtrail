@@ -1,0 +1,89 @@
+#!/usr/bin/env python3
+"""Diagnose why Google Sheets sync isn't importing new rows.
+
+Read-only: reads your configured sheet, parses it exactly like the importer
+does, and reports — per tab — how many rows parse into jobs and how many the
+importer would treat as NEW vs already-present. Writes nothing to your DB.
+
+Run from the repo root:  ./bin/jobtrail-sheet-debug
+"""
+
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
+
+from webapp import gauth, gsheets, gsync, sheets_map  # noqa: E402
+from webapp.db import Database  # noqa: E402
+
+DB_PATH = ROOT / "data" / "jobs.db"
+
+
+def main() -> int:
+    cfg = gsync._config()
+    if not gauth.is_connected(gsync.TOKEN):
+        print("Not connected. Run bin/jobtrail-google first.")
+        return 1
+    if not cfg.get("spreadsheet_url") or not cfg.get("tabs"):
+        print("No sheet configured (spreadsheet_url / tabs missing).")
+        return 1
+
+    print(f"Spreadsheet : {cfg['spreadsheet_url']}")
+    print(f"Synced tabs : {cfg['tabs']}")
+
+    try:
+        token = gauth.access_token(gsync.TOKEN)
+    except gauth.AuthError as exc:
+        print(f"\nAUTH PROBLEM: {exc}")
+        return 1
+
+    sid = gsheets.spreadsheet_id(cfg["spreadsheet_url"])
+    all_tabs = gsheets.list_tabs(sid, token)
+    print(f"All tabs    : {all_tabs}")
+    missing = [t for t in all_tabs if t not in cfg["tabs"]]
+    if missing:
+        print(f"  NOTE: these tabs exist but are NOT synced: {missing}")
+
+    db = Database(str(DB_PATH))
+    print(f"Jobs in DB  : {len(db.list_jobs())}\n")
+
+    grand_parsed = grand_new = 0
+    for tab in cfg["tabs"]:
+        values = gsheets.read_tab(sid, tab, token)
+        res = sheets_map.values_to_jobs(values, default_status=cfg.get("default_status"), tab=tab)
+        jobs = res["jobs"]
+        layout = res.get("mapping", {}).get("layout", "table")
+        new = [j for j in jobs if not db.find_by_key(j.get("url", ""), j.get("job_key"))]
+        grand_parsed += len(jobs)
+        grand_new += len(new)
+        print(f"Tab '{tab}': {len(values)} rows -> {len(jobs)} parsed jobs "
+              f"(layout={layout}), {len(new)} NEW")
+        for w in res.get("warnings", []):
+            print(f"    warning: {w}")
+        print("    most recent parsed rows:")
+        for j in jobs[-5:]:
+            print(f"      - {j.get('company')} | {j.get('title')} | "
+                  f"applied={j.get('date_applied')} | key={j.get('job_key')}")
+        if new:
+            print("    would import:")
+            for j in new[:15]:
+                print(f"      + {j.get('company')} | {j.get('title')} | "
+                      f"applied={j.get('date_applied')} | key={j.get('job_key')}")
+        print()
+
+    db.close()
+    print(f"TOTAL: parsed={grand_parsed}  new={grand_new}")
+    if grand_new == 0:
+        print("\nEvery parsed row already matches a DB job. If jobs you applied to\n"
+              "recently are MISSING above (not in 'most recent parsed rows'), they\n"
+              "aren't being read from the sheet — check the tab list and row format.\n"
+              "If they DO appear above but are not counted NEW, it's a dedup-key\n"
+              "collision.")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
