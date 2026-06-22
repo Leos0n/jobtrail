@@ -1,0 +1,167 @@
+"""Map Google Sheets rows (list-of-lists) into JobTrail job records.
+
+Source-agnostic: the first row is treated as headers, which are fuzzily matched
+to JobTrail fields. Free-text statuses and dates are normalized. A per-tab
+``default_status`` lets a "tab = pipeline stage" layout assign status by tab.
+
+Stdlib only. Shared by the Google Sheets connector (and reusable for CSV).
+"""
+
+from __future__ import annotations
+
+import hashlib
+import re
+from datetime import datetime
+
+STATUSES = ["saved", "applied", "interviewing", "offer", "rejected", "archived"]
+
+HEADER_ALIASES = {
+    "company": ["company", "employer", "organization", "org", "company name", "firm"],
+    "title": ["title", "role", "position", "job title", "job", "job role", "job name"],
+    "url": ["url", "link", "job link", "posting", "job url", "listing", "apply link", "job posting"],
+    "location": ["location", "city", "place", "where", "office"],
+    "salary": ["salary", "pay", "compensation", "comp", "salary range"],
+    "status": ["status", "stage", "state", "progress", "application status", "result", "outcome"],
+    "date_applied": ["date applied", "applied", "application date", "date", "applied on", "applied date", "submitted", "date submitted"],
+    "follow_up_date": ["follow up", "follow up date", "followup", "next step", "next step date", "reminder", "follow-up"],
+    "contact": ["contact", "recruiter", "referral", "point of contact", "poc", "hiring manager"],
+    "notes": ["notes", "note", "comments", "comment", "details", "remarks"],
+    "salary_expectation": ["salary expectation", "expected salary", "target salary", "ask", "desired salary"],
+    "rating": ["rating", "interest", "priority", "fit", "excitement"],
+}
+
+STATUS_SYNONYMS = {
+    "saved": ["saved", "wishlist", "to apply", "bookmarked", "interested", "backlog", "todo", "to do", "lead", "prospect"],
+    "applied": ["applied", "submitted", "sent", "application sent", "app sent", "in review", "under review", "pending", "waiting"],
+    "interviewing": ["interview", "interviewing", "interviews", "phone screen", "screen", "onsite", "on site", "final", "oa", "assessment", "in progress", "recruiter call", "tech screen"],
+    "offer": ["offer", "offered", "accepted", "hired", "verbal offer"],
+    "rejected": ["rejected", "declined", "no", "rejection", "ghosted", "closed", "withdrew", "withdrawn", "not selected", "turned down", "passed", "dinged"],
+    "archived": ["archived", "archive", "old", "inactive", "stale"],
+}
+
+_RATING_WORDS = {"low": 2, "medium": 3, "med": 3, "high": 5, "top": 5, "maybe": 2, "dream": 5}
+_DATE_FORMATS = ["%Y-%m-%d", "%m/%d/%Y", "%m/%d/%y", "%d/%m/%Y", "%Y/%m/%d", "%m-%d-%Y",
+                 "%b %d %Y", "%b %d, %Y", "%B %d %Y", "%B %d, %Y", "%d %b %Y", "%d %B %Y"]
+
+
+def _norm(s):
+    return re.sub(r"[\s_]+", " ", re.sub(r"[^\w\s]", " ", (s or "").lower())).strip()
+
+
+def detect_mapping(headers):
+    mapping, used = {}, set()
+    for h in headers:
+        n = _norm(h)
+        for field, aliases in HEADER_ALIASES.items():
+            if field in used:
+                continue
+            if n in aliases or any(n == _norm(a) for a in aliases):
+                mapping[h] = field
+                used.add(field)
+                break
+    for h in headers:
+        if h in mapping:
+            continue
+        n = _norm(h)
+        for field, aliases in HEADER_ALIASES.items():
+            if field in used:
+                continue
+            if n and any(a in n or n in a for a in aliases):
+                mapping[h] = field
+                used.add(field)
+                break
+    return mapping
+
+
+def normalize_status(value, default=None, has_date=False):
+    n = _norm(value)
+    if not n:
+        return default or ("applied" if has_date else "saved")
+    for status, syns in STATUS_SYNONYMS.items():
+        if n in syns or any(n == _norm(s) for s in syns):
+            return status
+    for status, syns in STATUS_SYNONYMS.items():
+        if any(s in n for s in syns):
+            return status
+    return default or "applied"
+
+
+def normalize_date(value):
+    v = (value or "").strip()
+    if not v:
+        return None
+    for fmt in _DATE_FORMATS:
+        try:
+            return datetime.strptime(v, fmt).strftime("%Y-%m-%d")
+        except ValueError:
+            continue
+    m = re.search(r"\d{4}-\d{2}-\d{2}", v)
+    return m.group(0) if m else v
+
+
+def normalize_rating(value):
+    v = _norm(value)
+    if not v:
+        return 0
+    if v in _RATING_WORDS:
+        return _RATING_WORDS[v]
+    m = re.search(r"\d+", v)
+    if m:
+        return max(0, min(5, int(m.group(0))))
+    return v.count("*") or v.count("★") or 0
+
+
+def _job_key(url, company, title, tab):
+    if url:
+        m = re.search(r"[?&](?:jk|vjk)=([0-9a-fA-F]+)", url) or re.search(r"/jobs/view/(\d+)", url)
+        if m:
+            return m.group(1)
+    basis = f"{_norm(tab)}|{_norm(company)}|{_norm(title)}"
+    return "gsheet-" + hashlib.sha1(basis.encode()).hexdigest()[:12]
+
+
+def values_to_jobs(values, default_status=None, tab=None, mapping=None):
+    """Convert a tab's values (list of rows; row 0 = headers) into job dicts."""
+    if not values:
+        return {"mapping": {}, "jobs": [], "warnings": ["empty tab"]}
+    headers = [str(h).strip() for h in values[0]]
+    mapping = mapping or detect_mapping(headers)
+    warnings = []
+    if "company" not in mapping.values() and "title" not in mapping.values():
+        warnings.append(f"tab '{tab}': no company/title column detected")
+
+    jobs = []
+    for row in values[1:]:
+        fields = {}
+        for i, header in enumerate(headers):
+            field = mapping.get(header)
+            if not field:
+                continue
+            val = (str(row[i]).strip() if i < len(row) and row[i] is not None else "")
+            if val:
+                fields[field] = val
+        if not any(fields.get(k) for k in ("company", "title", "url")):
+            continue
+
+        date_applied = normalize_date(fields.get("date_applied"))
+        job = {
+            "source": "google-sheet",
+            "url": fields.get("url"),
+            "company": fields.get("company"),
+            "title": fields.get("title"),
+            "location": fields.get("location"),
+            "salary": fields.get("salary"),
+            "status": normalize_status(fields.get("status"), default=default_status, has_date=bool(date_applied)),
+            "date_applied": date_applied,
+            "follow_up_date": normalize_date(fields.get("follow_up_date")),
+            "contact": fields.get("contact"),
+            "notes": fields.get("notes"),
+            "salary_expectation": fields.get("salary_expectation"),
+            "rating": normalize_rating(fields.get("rating")),
+        }
+        job["job_key"] = _job_key(job["url"], job["company"], job["title"], tab)
+        if not job["url"]:
+            job["url"] = f"gsheet://{job['job_key']}"
+        jobs.append({k: v for k, v in job.items() if v is not None})
+
+    return {"mapping": mapping, "jobs": jobs, "warnings": warnings}

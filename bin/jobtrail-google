@@ -1,0 +1,141 @@
+#!/usr/bin/env python3
+"""Connect a Google Sheet to JobTrail and sync it in (read-only, one-way).
+
+One-time setup (see docs/GOOGLE_SHEETS.md):
+  1. Create a free Google Cloud project, enable the Google Sheets API.
+  2. Create an OAuth "Desktop app" client; download credentials.json.
+  3. Put it at data/google/credentials.json.
+
+Then:
+  ./bin/jobtrail-google connect
+  ./bin/jobtrail-google tabs --sheet "https://docs.google.com/spreadsheets/d/<ID>/edit"
+  ./bin/jobtrail-google sync --sheet "<url>" --tabs "Applications,Older applications" [--dry-run]
+  ./bin/jobtrail-google sync            # re-sync using saved config (capture new rows)
+  ./bin/jobtrail-google status
+"""
+import argparse
+import json
+import os
+import sys
+import time
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
+
+from webapp import gauth, gsheets, sheets_map  # noqa: E402
+from webapp.db import Database  # noqa: E402
+
+GDIR = ROOT / "data" / "google"
+CREDS = GDIR / "credentials.json"
+TOKEN = GDIR / "token.json"
+CONFIG = GDIR / "config.json"
+DB = ROOT / "data" / "jobs.db"
+
+
+def load_config():
+    return json.loads(CONFIG.read_text()) if CONFIG.is_file() else {}
+
+
+def save_config(cfg):
+    GDIR.mkdir(parents=True, exist_ok=True)
+    CONFIG.write_text(json.dumps(cfg, indent=2))
+
+
+def need_token():
+    if not gauth.is_connected(TOKEN):
+        sys.exit("Not connected. Run: ./bin/jobtrail-google connect")
+    return gauth.access_token(TOKEN)
+
+
+def cmd_connect(args):
+    if not CREDS.is_file():
+        sys.exit(f"Missing {CREDS}. See docs/GOOGLE_SHEETS.md to create credentials.json.")
+    gauth.run_connect(CREDS, TOKEN)
+    print("\nConnected. Your refresh token is stored locally at", TOKEN)
+    print("(git-ignored, user-only permissions — it never leaves this machine).")
+
+
+def cmd_tabs(args):
+    token = need_token()
+    sid = gsheets.spreadsheet_id(args.sheet or load_config().get("spreadsheet_url") or "")
+    tabs = gsheets.list_tabs(sid, token)
+    print("Tabs in this spreadsheet:")
+    for t in tabs:
+        print("  -", t)
+
+
+def cmd_sync(args):
+    token = need_token()
+    cfg = load_config()
+    sheet = args.sheet or cfg.get("spreadsheet_url")
+    if not sheet:
+        sys.exit("No sheet configured. Pass --sheet <url> the first time.")
+    sid = gsheets.spreadsheet_id(sheet)
+    tabs = [t.strip() for t in args.tabs.split(",")] if args.tabs else cfg.get("tabs")
+    if not tabs:
+        sys.exit("No tabs selected. Pass --tabs \"Tab A,Tab B\" the first time "
+                 "(use the 'tabs' command to list them).")
+
+    all_jobs, warnings = [], []
+    for tab in tabs:
+        values = gsheets.read_tab(sid, tab, token)
+        res = sheets_map.values_to_jobs(values, default_status=args.status, tab=tab)
+        print(f"  {tab!r}: {len(res['jobs'])} job row(s)")
+        all_jobs.extend(res["jobs"])
+        warnings.extend(res["warnings"])
+    for w in warnings:
+        print("  !", w, file=sys.stderr)
+
+    if args.dry_run:
+        db = Database(str(DB))
+        new = sum(1 for j in all_jobs if not db.find_by_key(j.get("url", ""), j.get("job_key")))
+        db.close()
+        print(f"\n[dry run] {len(all_jobs)} rows · {new} new, {len(all_jobs)-new} already present. Nothing written.")
+        return
+
+    db = Database(str(DB))
+    result = db.import_jobs(all_jobs)
+    db.close()
+    cfg.update({
+        "spreadsheet_id": sid,
+        "spreadsheet_url": sheet,
+        "tabs": tabs,
+        "default_status": args.status,
+        "last_sync": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        "last_added": result["added"],
+        "last_total": len(all_jobs),
+    })
+    save_config(cfg)
+    print(f"\nSynced. Added {result['added']} new job(s); skipped {result['skipped']} already present.")
+
+
+def cmd_status(args):
+    print("Connected:", gauth.is_connected(TOKEN))
+    cfg = load_config()
+    if cfg:
+        print("Spreadsheet:", cfg.get("spreadsheet_url"))
+        print("Tabs:", ", ".join(cfg.get("tabs", [])) or "—")
+        print("Last sync:", cfg.get("last_sync", "never"),
+              f"(added {cfg.get('last_added', 0)} of {cfg.get('last_total', 0)} rows)")
+    else:
+        print("No sheet configured yet.")
+
+
+def main():
+    ap = argparse.ArgumentParser(prog="jobtrail-google", description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    sub.add_parser("connect").set_defaults(func=cmd_connect)
+    t = sub.add_parser("tabs"); t.add_argument("--sheet"); t.set_defaults(func=cmd_tabs)
+    s = sub.add_parser("sync")
+    s.add_argument("--sheet"); s.add_argument("--tabs"); s.add_argument("--status", default=None,
+                   help="Default status for rows whose status cell is blank (e.g. applied).")
+    s.add_argument("--dry-run", action="store_true"); s.set_defaults(func=cmd_sync)
+    sub.add_parser("status").set_defaults(func=cmd_status)
+    args = ap.parse_args()
+    args.func(args)
+
+
+if __name__ == "__main__":
+    main()

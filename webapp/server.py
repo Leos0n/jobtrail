@@ -25,7 +25,7 @@ sys.path.insert(0, str(ROOT))
 from indeed_cli.fetch import FetchError  # noqa: E402
 from indeed_cli.render import render_markdown  # noqa: E402
 from indeed_cli.sources import fetch_and_parse  # noqa: E402
-from webapp import backup  # noqa: E402
+from webapp import backup, gsync  # noqa: E402
 from webapp.db import STATUSES, Database  # noqa: E402
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
@@ -108,6 +108,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._send_json(backup.list_snapshots(self.backups_dir))
         if path == "/api/export":
             return self._export()
+        if path == "/api/google/status":
+            return self._send_json(gsync.status())
 
         m = re.fullmatch(r"/api/jobs/(\d+)", path)
         if m:
@@ -139,6 +141,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._add_job()
         if path == "/api/import":
             return self._import()
+        if path == "/api/google/sync":
+            return self._send_json(gsync.sync_now(self.db_path))
         if path == "/api/backup":
             self._backup("manual")
             return self._send_json({"ok": True, "backups": backup.list_snapshots(self.backups_dir)})
@@ -349,6 +353,8 @@ def serve(
         backup.snapshot(resolved_db, resolved_backups, reason="startup")
     periodic = backup.PeriodicBackup(db, resolved_db, resolved_backups)
     periodic.start()
+    sheet_sync = gsync.AutoSync(resolved_db)
+    sheet_sync.start()
 
     httpd = ThreadingHTTPServer((host, port), Handler)
     url = f"http://{host}:{port}"
@@ -361,6 +367,7 @@ def serve(
         print("\n  Shutting down.")
     finally:
         periodic.stop()
+        sheet_sync.stop()
         backup.snapshot(resolved_db, resolved_backups, reason="shutdown")
         httpd.server_close()
         db.close()
