@@ -18,6 +18,7 @@ const ICONS = {
   x: '<path d="M6 6l12 12M18 6 6 18"/>',
   external: '<path d="M14 5h5v5M19 5l-8 8M12 5H6a1 1 0 0 0-1 1v12a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-6"/>',
   search: '<circle cx="11" cy="11" r="7"/><path d="m20 20-3.4-3.4"/>',
+  sync: '<path d="M4 12a8 8 0 0 1 13.7-5.7L20 8M20 4v4h-4"/><path d="M20 12a8 8 0 0 1-13.7 5.7L4 16M4 20v-4h4"/>',
 };
 function svg(name, size = 20) {
   return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[name] || ""}</svg>`;
@@ -84,8 +85,24 @@ async function loadBackupStatus() {
   try { const b = await api.get("/api/backups"); $("#backup-status").textContent = b.length ? `Last backup: ${fmtWhenIso(b[0].created)}` : "No backups yet"; } catch {}
 }
 async function checkSyncHealth() {
-  // Surface a stalled Google Sheets sync instead of letting it fail silently.
-  try { const s = await api.get("/api/google/status"); if (s.connected && s.last_error) toast("Google Sheets sync is failing — " + s.last_error, true); } catch {}
+  // Surface a stalled Google Sheets sync instead of letting it fail silently,
+  // and only reveal the manual "Sync now" button when a sheet is connected.
+  try {
+    const s = await api.get("/api/google/status");
+    const connected = s.connected && s.spreadsheet_url;
+    $("#sync-sheets-item").hidden = !connected;
+    if (connected) $("#sync-sheets-sub").textContent = s.last_sync ? `Last synced ${fmtWhenIso(s.last_sync)}` : "Pull new rows from your sheet";
+    if (s.connected && s.last_error) toast("Google Sheets sync is failing — " + s.last_error, true);
+  } catch {}
+}
+async function syncSheets() {
+  toast("Syncing Google Sheets…");
+  try {
+    const r = await api.send("POST", "/api/google/sync");
+    if (!r.ok) { toast(r.reason === "not connected" ? "Google Sheets isn't connected yet." : "Sync failed — " + r.reason, true); return; }
+    await loadAll();
+    toast(r.added ? `Synced — ${r.added} new job${r.added > 1 ? "s" : ""} added.` : "Synced — already up to date.");
+  } catch (err) { toast(err.message, true); }
 }
 
 /* ---------------- render router ---------------- */
@@ -509,7 +526,7 @@ function boot() {
     if (item.dataset.appearance) { setAppearance(item.dataset.appearance); return; }
     toggleMenu(false);
     const act = item.dataset.act;
-    if (act === "backup") backupNow(); else if (act === "export") exportBackup(); else if (act === "trash") openTrash();
+    if (act === "sync") syncSheets(); else if (act === "backup") backupNow(); else if (act === "export") exportBackup(); else if (act === "trash") openTrash();
   });
   $("#import-file").addEventListener("change", (ev) => { if (ev.target.files[0]) { importBackup(ev.target.files[0]); ev.target.value = ""; toggleMenu(false); } });
 
