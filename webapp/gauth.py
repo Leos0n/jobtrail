@@ -21,6 +21,7 @@ import json
 import os
 import secrets
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 import webbrowser
@@ -29,6 +30,10 @@ from pathlib import Path
 AUTH_URI = "https://accounts.google.com/o/oauth2/v2/auth"
 TOKEN_URI = "https://oauth2.googleapis.com/token"
 SCOPE = "https://www.googleapis.com/auth/spreadsheets.readonly"
+
+
+class AuthError(RuntimeError):
+    """Raised when a stored Google authorization can no longer be used."""
 
 
 def _b64url(raw: bytes) -> str:
@@ -164,12 +169,32 @@ def access_token(token_path):
     age = int(time.time()) - tok.get("_obtained", 0)
     if tok.get("access_token") and age < tok.get("expires_in", 3600) - 120:
         return tok["access_token"]
-    fresh = _post(TOKEN_URI, {
-        "client_id": tok["_client_id"],
-        "client_secret": tok["_client_secret"],
-        "refresh_token": tok["refresh_token"],
-        "grant_type": "refresh_token",
-    })
+    try:
+        fresh = _post(TOKEN_URI, {
+            "client_id": tok["_client_id"],
+            "client_secret": tok["_client_secret"],
+            "refresh_token": tok["refresh_token"],
+            "grant_type": "refresh_token",
+        })
+    except urllib.error.HTTPError as exc:
+        detail = ""
+        try:
+            detail = json.loads(exc.read().decode("utf-8")).get("error", "")
+        except Exception:
+            pass
+        # invalid_grant = the refresh token was revoked or expired (common for
+        # OAuth clients left in "Testing" status, which Google caps at 7 days).
+        raise AuthError(
+            f"Google rejected the refresh token ({detail or exc.code}). Your "
+            "authorization has likely expired or been revoked — reconnect by "
+            "running `bin/jobtrail-google`."
+        ) from exc
+    if "access_token" not in fresh:
+        raise AuthError(
+            "Google did not return a new access token "
+            f"({fresh.get('error', 'unknown error')}). Reconnect by running "
+            "`bin/jobtrail-google`."
+        )
     tok["access_token"] = fresh["access_token"]
     tok["expires_in"] = fresh.get("expires_in", 3600)
     tok["_obtained"] = int(time.time())

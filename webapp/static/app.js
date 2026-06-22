@@ -77,10 +77,15 @@ async function loadAll() {
   state.jobs = await api.get("/api/jobs");
   state.trash = await api.get("/api/trash");
   loadBackupStatus();
+  checkSyncHealth();
   render();
 }
 async function loadBackupStatus() {
   try { const b = await api.get("/api/backups"); $("#backup-status").textContent = b.length ? `Last backup: ${fmtWhenIso(b[0].created)}` : "No backups yet"; } catch {}
+}
+async function checkSyncHealth() {
+  // Surface a stalled Google Sheets sync instead of letting it fail silently.
+  try { const s = await api.get("/api/google/status"); if (s.connected && s.last_error) toast("Google Sheets sync is failing — " + s.last_error, true); } catch {}
 }
 
 /* ---------------- render router ---------------- */

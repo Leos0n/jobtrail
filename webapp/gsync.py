@@ -9,6 +9,7 @@ the user hasn't connected a sheet, so it's always safe to call.
 from __future__ import annotations
 
 import json
+import sys
 import threading
 import time
 from pathlib import Path
@@ -26,6 +27,15 @@ def _config():
     return json.loads(CONFIG.read_text()) if CONFIG.is_file() else {}
 
 
+def _save_config(cfg):
+    GDIR.mkdir(parents=True, exist_ok=True)
+    CONFIG.write_text(json.dumps(cfg, indent=2))
+
+
+def _stamp():
+    return time.strftime("%Y-%m-%dT%H:%M:%S")
+
+
 def status() -> dict:
     cfg = _config()
     return {
@@ -35,6 +45,8 @@ def status() -> dict:
         "last_sync": cfg.get("last_sync"),
         "last_added": cfg.get("last_added"),
         "last_total": cfg.get("last_total"),
+        "last_attempt": cfg.get("last_attempt"),
+        "last_error": cfg.get("last_error"),
     }
 
 
@@ -50,32 +62,47 @@ def sync_now(db_path) -> dict:
     if not cfg.get("spreadsheet_url") or not cfg.get("tabs"):
         return {"ok": False, "reason": "no sheet configured"}
 
-    token = gauth.access_token(TOKEN)
-    sid = gsheets.spreadsheet_id(cfg["spreadsheet_url"])
-    jobs = []
-    for tab in cfg["tabs"]:
-        values = gsheets.read_tab(sid, tab, token)
-        jobs.extend(sheets_map.values_to_jobs(values, default_status=cfg.get("default_status"), tab=tab)["jobs"])
+    cfg["last_attempt"] = _stamp()
+    try:
+        token = gauth.access_token(TOKEN)
+        sid = gsheets.spreadsheet_id(cfg["spreadsheet_url"])
+        jobs = []
+        for tab in cfg["tabs"]:
+            values = gsheets.read_tab(sid, tab, token)
+            jobs.extend(sheets_map.values_to_jobs(values, default_status=cfg.get("default_status"), tab=tab)["jobs"])
+        db = Database(str(db_path))
+        result = db.import_jobs(jobs)
+        db.close()
+    except Exception as exc:
+        # Don't crash, but never fail *silently*: record the reason so it
+        # surfaces in /api/google/status, and log it for the server console.
+        reason = f"{type(exc).__name__}: {exc}"
+        cfg["last_error"] = reason
+        _save_config(cfg)
+        print(f"[gsync] sync failed: {reason}", file=sys.stderr)
+        return {"ok": False, "reason": reason}
 
-    db = Database(str(db_path))
-    result = db.import_jobs(jobs)
-    db.close()
     cfg.update({
-        "last_sync": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        "last_sync": _stamp(),
         "last_added": result["added"],
         "last_total": len(jobs),
+        "last_error": None,
     })
-    GDIR.mkdir(parents=True, exist_ok=True)
-    CONFIG.write_text(json.dumps(cfg, indent=2))
+    _save_config(cfg)
     return {"ok": True, "added": result["added"], "skipped": result["skipped"], "total": len(jobs)}
 
 
 class AutoSync:
-    """Daemon thread: capture new sheet rows periodically while the app runs."""
+    """Daemon thread: capture new sheet rows periodically while the app runs.
 
-    def __init__(self, db_path, interval: float = 900.0):
+    Runs one sync shortly after startup (so freshly added rows don't wait a
+    full interval to appear), then every ``interval`` seconds.
+    """
+
+    def __init__(self, db_path, interval: float = 900.0, startup_delay: float = 5.0):
         self.db_path = db_path
         self.interval = interval
+        self.startup_delay = startup_delay
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._run, daemon=True)
 
@@ -86,9 +113,14 @@ class AutoSync:
         self._stop.set()
 
     def _run(self):
+        if not self._stop.wait(self.startup_delay):
+            self._tick()
         while not self._stop.wait(self.interval):
-            try:
-                if configured():
-                    sync_now(self.db_path)
-            except Exception:
-                pass  # never let sheet sync crash the server
+            self._tick()
+
+    def _tick(self):
+        try:
+            if configured():
+                sync_now(self.db_path)
+        except Exception as exc:  # defensive: the daemon must never die
+            print(f"[gsync] auto-sync tick error: {exc}", file=sys.stderr)

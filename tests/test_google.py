@@ -2,14 +2,20 @@
 
 import base64
 import hashlib
+import io
+import json
 import os
 import sys
+import tempfile
+import time
 import unittest
+import urllib.error
+from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from webapp import gauth, gsheets, sheets_map  # noqa: E402
+from webapp import gauth, gsheets, gsync, sheets_map  # noqa: E402
 
 
 class TestSpreadsheetId(unittest.TestCase):
@@ -93,6 +99,104 @@ class TestDateGroupedYearCarry(unittest.TestCase):
         self.assertEqual(by["Home Depot"], "2026-05-20")
         self.assertEqual(by["Costco"], "2026-06-03")   # year carried from May header
         self.assertEqual(by["Lowe's"], "2026-06-05")
+
+
+class TestTokenRefresh(unittest.TestCase):
+    """A dead/expired refresh token must raise a clear AuthError, not KeyError."""
+
+    def setUp(self):
+        self.dir = tempfile.mkdtemp()
+        self.token = Path(self.dir) / "token.json"
+        self.token.write_text(json.dumps({
+            "access_token": "old", "refresh_token": "r", "expires_in": 3600,
+            "_obtained": 0, "_client_id": "cid", "_client_secret": "sec",
+        }))
+        self._orig_post = gauth._post
+
+    def tearDown(self):
+        gauth._post = self._orig_post
+
+    def test_invalid_grant_raises_autherror(self):
+        def boom(url, data):
+            raise urllib.error.HTTPError(
+                url, 400, "Bad Request", {},
+                io.BytesIO(b'{"error": "invalid_grant"}'),
+            )
+        gauth._post = boom
+        with self.assertRaises(gauth.AuthError) as ctx:
+            gauth.access_token(self.token)
+        self.assertIn("invalid_grant", str(ctx.exception))
+        self.assertIn("bin/jobtrail-google", str(ctx.exception))
+
+    def test_missing_access_token_raises_autherror(self):
+        gauth._post = lambda url, data: {"error": "unauthorized_client"}
+        with self.assertRaises(gauth.AuthError):
+            gauth.access_token(self.token)
+
+    def test_successful_refresh_returns_token(self):
+        gauth._post = lambda url, data: {"access_token": "fresh", "expires_in": 3600}
+        self.assertEqual(gauth.access_token(self.token), "fresh")
+
+
+class TestSyncErrorSurfacing(unittest.TestCase):
+    """sync_now must record failures (not swallow them) and clear on success."""
+
+    def setUp(self):
+        self.dir = Path(tempfile.mkdtemp())
+        self._orig = {k: getattr(gsync, k) for k in ("GDIR", "TOKEN", "CONFIG")}
+        gsync.GDIR = self.dir
+        gsync.TOKEN = self.dir / "token.json"
+        gsync.CONFIG = self.dir / "config.json"
+        gsync.TOKEN.write_text("{}")  # is_connected only checks the file exists
+        gsync.CONFIG.write_text(json.dumps(
+            {"spreadsheet_url": "1AbCdEFghIJklMnOpQrStUvWxYz0123456789", "tabs": ["T"]}))
+        self.db_path = str(self.dir / "jobs.db")
+        self._oa, self._rt = gauth.access_token, gsheets.read_tab
+
+    def tearDown(self):
+        for k, v in self._orig.items():
+            setattr(gsync, k, v)
+        gauth.access_token, gsheets.read_tab = self._oa, self._rt
+
+    def test_auth_failure_is_recorded_not_swallowed(self):
+        def boom(_):
+            raise gauth.AuthError("Google rejected the refresh token (invalid_grant).")
+        gauth.access_token = boom
+        res = gsync.sync_now(self.db_path)
+        self.assertFalse(res["ok"])
+        self.assertIn("invalid_grant", res["reason"])
+        st = gsync.status()
+        self.assertIn("invalid_grant", st["last_error"])
+        self.assertIsNotNone(st["last_attempt"])
+
+    def test_success_clears_last_error(self):
+        gauth.access_token = lambda _: "tok"
+        gsheets.read_tab = lambda sid, tab, token: [["Company", "Role"], ["Acme", "Engineer"]]
+        # seed a stale error first
+        gsync._save_config({**json.loads(gsync.CONFIG.read_text()), "last_error": "old failure"})
+        res = gsync.sync_now(self.db_path)
+        self.assertTrue(res["ok"])
+        self.assertEqual(res["added"], 1)
+        self.assertIsNone(gsync.status()["last_error"])
+        self.assertIsNotNone(gsync.status()["last_sync"])
+
+
+class TestAutoSyncStartup(unittest.TestCase):
+    """AutoSync should sync shortly after startup, not after a full interval."""
+
+    def test_initial_tick_runs_before_full_interval(self):
+        calls = []
+        orig_configured, orig_sync = gsync.configured, gsync.sync_now
+        gsync.configured = lambda: True
+        gsync.sync_now = lambda db: calls.append(time.time())
+        try:
+            auto = gsync.AutoSync("ignored.db", interval=999, startup_delay=0.05)
+            auto.start()
+            time.sleep(0.3)
+            auto.stop()
+        finally:
+            gsync.configured, gsync.sync_now = orig_configured, orig_sync
+        self.assertEqual(len(calls), 1, "expected exactly one startup sync, not an interval wait")
 
 
 if __name__ == "__main__":
