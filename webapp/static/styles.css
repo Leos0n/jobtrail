@@ -206,6 +206,47 @@ body {
 .cal-event.applied .ce-tag { color: var(--muted); }
 .cal-more { display: block; font-size: 11px; color: var(--muted); margin-top: 4px; }
 .up-day { font-size: 12px; color: var(--ink); font-weight: 600; margin: 12px 0 6px; }
+
+.top-right { display: flex; align-items: center; gap: 10px; justify-self: end; }
+.search-btn { width: 42px; height: 42px; display: grid; place-items: center; background: var(--surface); border: 1px solid var(--hairline-2); border-radius: var(--r-md); cursor: pointer; color: var(--muted); box-shadow: var(--shadow-sm); }
+.search-btn:hover { border-color: var(--accent); color: var(--accent); }
+
+.stats { display: flex; gap: 12px; max-width: 1000px; margin: 0 auto 26px; }
+.stat { flex: 1; background: var(--surface); border: 1px solid var(--hairline); border-radius: var(--r-md); padding: 14px 16px; text-align: center; box-shadow: var(--shadow-sm); }
+.stat-val { display: block; font-family: var(--serif); font-weight: 600; font-size: 26px; line-height: 1; }
+.stat-label { font-size: 12px; color: var(--muted); margin-top: 6px; display: block; }
+@media (max-width: 560px) { .stats { flex-wrap: wrap; } .stat { min-width: calc(50% - 6px); } }
+
+.recent-head { display: flex; align-items: baseline; justify-content: space-between; max-width: 1000px; margin: 0 auto 16px; }
+.muted-count { font-family: var(--sans); font-size: 13px; font-weight: 500; color: var(--faint); }
+.recent.collapsed #recent-list { display: none; }
+
+.month-summary { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 14px; }
+.ms-chip { background: var(--surface-2); border-radius: 999px; padding: 5px 11px; font-size: 12.5px; color: var(--muted); }
+.ms-chip b { color: var(--ink); }
+.day-group { margin-bottom: 2px; }
+.day-head { display: flex; align-items: center; gap: 8px; width: 100%; background: none; border: none; cursor: pointer; font: inherit; color: var(--ink); padding: 10px 4px; border-top: 1px solid var(--hairline); }
+.day-group:first-of-type .day-head { border-top: none; }
+.day-head .dh-label { font-size: 13px; font-weight: 600; }
+.day-head .day-count { background: var(--surface-2); color: var(--muted); border-radius: 999px; padding: 1px 8px; font-size: 11.5px; }
+.day-head .day-chev { margin-left: auto; color: var(--faint); transition: transform .15s var(--ease); display: grid; place-items: center; }
+.day-group.open .day-head .day-chev { transform: rotate(90deg); }
+.day-jobs { display: none; padding-bottom: 6px; }
+.day-group.open .day-jobs { display: block; }
+
+.search-scrim { position: fixed; inset: 0; background: rgba(38,33,28,.34); z-index: 70; animation: fade .18s var(--ease); }
+.search-panel { position: fixed; top: 84px; left: 50%; transform: translateX(-50%); width: min(620px, 92vw); z-index: 71; background: var(--surface); border: 1px solid var(--hairline); border-radius: var(--r-lg); box-shadow: var(--shadow-md); overflow: hidden; animation: slidedown .2s var(--ease); }
+@keyframes slidedown { from { opacity: 0; transform: translateX(-50%) translateY(-8px); } to { opacity: 1; transform: translateX(-50%) translateY(0); } }
+.search-input-wrap { display: flex; align-items: center; gap: 12px; padding: 14px 18px; border-bottom: 1px solid var(--hairline); }
+.search-ic { color: var(--faint); display: grid; place-items: center; }
+#search-input { flex: 1; border: none; background: none; font: inherit; font-size: 17px; color: var(--ink); }
+#search-input:focus { outline: none; }
+.search-esc { font-size: 11px; color: var(--faint); border: 1px solid var(--hairline-2); border-radius: 6px; padding: 2px 7px; }
+.search-results { max-height: 56vh; overflow-y: auto; }
+.search-hint { color: var(--faint); font-size: 14px; padding: 22px; text-align: center; margin: 0; }
+.search-result { display: flex; align-items: center; gap: 13px; width: 100%; text-align: left; background: none; border: none; border-top: 1px solid var(--hairline); font: inherit; color: var(--ink); padding: 12px 18px; cursor: pointer; }
+.search-result:first-child { border-top: none; }
+.search-result:hover, .search-result.active { background: var(--surface-2); }
 .cal-week { display: grid; grid-template-columns: repeat(7, 1fr); gap: 10px; }
 .cal-week .wk-col { border: 1px solid var(--hairline); border-radius: var(--r-md); min-height: 220px; padding: 10px; }
 .cal-week .wk-head { font-size: 12px; color: var(--muted); margin-bottom: 8px; }

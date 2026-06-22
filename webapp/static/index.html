@@ -27,7 +27,9 @@
       <button class="navlink" data-view="calendar">Calendar</button>
     </nav>
 
-    <div class="data-wrap">
+    <div class="top-right">
+      <button id="search-btn" class="search-btn" aria-label="Search applications (press /)"><span data-ic="search" aria-hidden="true"></span></button>
+      <div class="data-wrap">
       <button id="data-btn" class="data-btn" aria-haspopup="true" aria-expanded="false">
         Data <span class="caret" aria-hidden="true"></span>
       </button>
@@ -72,6 +74,7 @@
         </button>
       </div>
     </div>
+    </div>
   </header>
 
   <main class="canvas">
@@ -90,8 +93,13 @@
 
       <div class="rule"></div>
 
+      <div class="stats" id="stats"></div>
+
       <section class="recent">
-        <h2 class="section-title">Recently added</h2>
+        <div class="recent-head">
+          <h2 class="section-title">Recently added <span class="muted-count" id="recent-count"></span></h2>
+          <button id="recent-toggle" class="link-act" aria-expanded="true">Hide</button>
+        </div>
         <div id="recent-list" class="row-list"></div>
         <div id="recent-empty" class="empty" hidden>
           <p class="empty-title">Nothing here yet</p>
@@ -150,6 +158,16 @@
       <div id="trash-list" class="row-list"></div>
       <div id="trash-empty" class="empty" hidden><p class="muted">Nothing in Trash.</p></div>
     </div>
+  </div>
+
+  <div id="search-scrim" class="search-scrim" hidden></div>
+  <div id="search-panel" class="search-panel" hidden role="dialog" aria-label="Search applications">
+    <div class="search-input-wrap">
+      <span class="search-ic" data-ic="search" aria-hidden="true"></span>
+      <input id="search-input" type="search" placeholder="Search by company, role, status, location…" autocomplete="off" aria-label="Search applications" />
+      <kbd class="search-esc">esc</kbd>
+    </div>
+    <div id="search-results" class="search-results"></div>
   </div>
 
   <script src="/static/app.js"></script>
