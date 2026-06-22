@@ -49,8 +49,13 @@ function fmtWhenIso(iso) { const d = iso && new Date(iso); return d && !isNaN(d)
 const byId = (id) => state.jobs.find((j) => j.id === id) || state.trash.find((j) => j.id === id);
 
 function favClass(source) { const s = (source || "").toLowerCase(); return s.includes("linkedin") ? "linkedin" : s.includes("indeed") ? "indeed" : "other"; }
-function favGlyph(job) { const c = favClass(job.source); if (c === "linkedin") return "in"; if (c === "indeed") return "id"; return (job.company || "J").trim().charAt(0).toUpperCase(); }
-function favBadge(job) { return `<span class="fav ${favClass(job.source)}">${esc(favGlyph(job))}</span>`; }
+function favGlyph(job) { return (job.company || job.title || "J").trim().charAt(0).toUpperCase(); }
+function brandSVG(source) {
+  const c = favClass(source);
+  if (c === "linkedin") return '<svg viewBox="0 0 40 40" width="100%" height="100%" aria-hidden="true"><rect width="40" height="40" fill="#0a66c2"/><text x="20" y="28" text-anchor="middle" font-family="Plus Jakarta Sans, Arial, sans-serif" font-size="20" font-weight="700" fill="#fff">in</text></svg>';
+  return '<svg viewBox="0 0 40 40" width="100%" height="100%" aria-hidden="true"><rect width="40" height="40" fill="#2557a7"/><circle cx="20" cy="12.5" r="3.6" fill="#fff"/><rect x="16.4" y="17.5" width="7.2" height="13.5" rx="3.6" fill="#fff"/></svg>';
+}
+function favBadge(job) { const c = favClass(job.source); if (c === "other") return `<span class="fav other">${esc(favGlyph(job))}</span>`; return `<span class="fav brand">${brandSVG(job.source)}</span>`; }
 function srcLabel(source) { const c = favClass(source); return c === "linkedin" ? "LinkedIn" : c === "indeed" ? "Indeed" : (source ? cap(source.replace("-", " ")) : "Saved link"); }
 
 /* ---------------- toast ---------------- */
