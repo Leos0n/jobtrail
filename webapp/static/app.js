@@ -1,400 +1,361 @@
 "use strict";
 
-const state = { jobs: [], trash: [], statuses: [], filter: "all", selectedId: null };
-
-const $ = (sel, root = document) => root.querySelector(sel);
-
-/* Reveal job cards as they enter view (vanilla, dependency-free). */
-const revealObserver = ("IntersectionObserver" in window)
-  ? new IntersectionObserver((entries, obs) => {
-      for (const e of entries) {
-        if (e.isIntersecting) { e.target.classList.add("in"); obs.unobserve(e.target); }
-      }
-    }, { rootMargin: "0px 0px -8% 0px" })
-  : null;
-const api = {
-  async get(path) { const r = await fetch(path); if (!r.ok) throw await err(r); return r.json(); },
-  async send(method, path, body) {
-    const r = await fetch(path, {
-      method,
-      headers: { "Content-Type": "application/json" },
-      body: body ? JSON.stringify(body) : undefined,
-    });
-    if (!r.ok) throw await err(r);
-    return r.status === 204 ? null : r.json();
-  },
+/* ---------------- icons (inline SVG, stroke = currentColor) ---------------- */
+const ICONS = {
+  cloud: '<path d="M7 18h10a4 4 0 0 0 .5-7.97A6 6 0 0 0 6 9a4.5 4.5 0 0 0 1 8.9Z"/>',
+  download: '<path d="M12 4v10m0 0 4-4m-4 4-4-4M5 19h14"/>',
+  upload: '<path d="M12 16V6m0 0 4 4m-4-4-4 4M5 19h14"/>',
+  check: '<circle cx="12" cy="12" r="9"/><path d="m8.5 12 2.5 2.5L16 9"/>',
+  grid: '<rect x="4" y="4" width="6" height="6" rx="1"/><rect x="14" y="4" width="6" height="6" rx="1"/><rect x="4" y="14" width="6" height="6" rx="1"/><rect x="14" y="14" width="6" height="6" rx="1"/>',
+  target: '<circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="3"/>',
+  trash: '<path d="M5 7h14M10 7V5h4v2m-7 0 1 12h8l1-12"/>',
+  link: '<path d="M10 13a4 4 0 0 0 5.66 0l2.83-2.83a4 4 0 0 0-5.66-5.66L11 6m3 5a4 4 0 0 0-5.66 0L5.5 13.83a4 4 0 0 0 5.66 5.66L13 18"/>',
+  lock: '<rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/>',
+  book: '<path d="M5 5a2 2 0 0 1 2-2h11v16H7a2 2 0 0 0-2 2V5Z"/><path d="M18 17H7a2 2 0 0 0-2 2"/>',
+  "chev-left": '<path d="m15 6-6 6 6 6"/>',
+  "chev-right": '<path d="m9 6 6 6-6 6"/>',
+  chev: '<path d="m9 6 6 6-6 6"/>',
+  x: '<path d="M6 6l12 12M18 6 6 18"/>',
+  external: '<path d="M14 5h5v5M19 5l-8 8M12 5H6a1 1 0 0 0-1 1v12a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-6"/>',
 };
-async function err(r) {
-  try { const j = await r.json(); return new Error(j.error || r.statusText); }
-  catch { return new Error(r.statusText); }
+function svg(name, size = 20) {
+  return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[name] || ""}</svg>`;
+}
+function paintIcons(root = document) {
+  root.querySelectorAll("[data-ic]").forEach((el) => { if (!el.dataset.painted) { el.innerHTML = svg(el.dataset.ic); el.dataset.painted = "1"; } });
 }
 
-/* ---------- toast (with optional action) ---------- */
-function toast(msg, isErr = false) { showToast(msg, isErr ? "err" : "", null, null, isErr ? 5000 : 2500); }
-function toastAction(msg, label, fn) { showToast(msg, "", label, fn, 7000); }
+/* ---------------- api ---------------- */
+const $ = (s, r = document) => r.querySelector(s);
+const api = {
+  async get(p) { const r = await fetch(p); if (!r.ok) throw await e(r); return r.json(); },
+  async send(m, p, b) { const r = await fetch(p, { method: m, headers: { "Content-Type": "application/json" }, body: b ? JSON.stringify(b) : undefined }); if (!r.ok) throw await e(r); return r.status === 204 ? null : r.json(); },
+};
+async function e(r) { try { return new Error((await r.json()).error || r.statusText); } catch { return new Error(r.statusText); } }
+
+/* ---------------- state ---------------- */
+const state = { jobs: [], trash: [], statuses: [], view: "add", calMode: "month", calCursor: startOfMonth(new Date()), selectedId: null };
+
+/* ---------------- utils ---------------- */
+function esc(s) { return String(s == null ? "" : s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;"); }
+const cap = (s) => (s || "").charAt(0).toUpperCase() + (s || "").slice(1);
+function startOfMonth(d) { return new Date(d.getFullYear(), d.getMonth(), 1); }
+function isoToDate(s) { if (!s) return null; const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(s); return m ? new Date(+m[1], +m[2] - 1, +m[3]) : null; }
+function sameDay(a, b) { return a && b && a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate(); }
+const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+const DOW = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+function fmtShort(d) { return d ? `${MONTHS[d.getMonth()].slice(0, 3)} ${d.getDate()}` : ""; }
+function fmtWhenIso(iso) { const d = iso && new Date(iso); return d && !isNaN(d) ? d.toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "—"; }
+const byId = (id) => state.jobs.find((j) => j.id === id) || state.trash.find((j) => j.id === id);
+
+function favClass(source) { const s = (source || "").toLowerCase(); return s.includes("linkedin") ? "linkedin" : s.includes("indeed") ? "indeed" : "other"; }
+function favGlyph(job) { const c = favClass(job.source); if (c === "linkedin") return "in"; if (c === "indeed") return "id"; return (job.company || "J").trim().charAt(0).toUpperCase(); }
+function favBadge(job) { return `<span class="fav ${favClass(job.source)}">${esc(favGlyph(job))}</span>`; }
+function srcLabel(source) { const c = favClass(source); return c === "linkedin" ? "LinkedIn" : c === "indeed" ? "Indeed" : (source ? cap(source.replace("-", " ")) : "Saved link"); }
+
+/* ---------------- toast ---------------- */
+function toast(msg, isErr) { showToast(msg, isErr ? "err" : "", null, null, isErr ? 5000 : 2600); }
+function toastUndo(msg, fn) { showToast(msg, "", "Undo", fn, 7000); }
 function showToast(msg, cls, label, fn, ms) {
-  const t = $("#toast");
-  t.innerHTML = "";
-  t.className = "toast" + (cls ? " " + cls : "");
-  const span = document.createElement("span"); span.textContent = msg; t.appendChild(span);
-  if (label) {
-    const b = document.createElement("button");
-    b.className = "toast-action"; b.textContent = label;
-    b.onclick = () => { t.hidden = true; fn(); };
-    t.appendChild(b);
-  }
-  t.hidden = false;
-  clearTimeout(showToast._t);
-  showToast._t = setTimeout(() => { t.hidden = true; }, ms);
+  const t = $("#toast"); t.className = "toast" + (cls ? " " + cls : ""); t.innerHTML = `<span>${esc(msg)}</span>`;
+  if (label) { const b = document.createElement("button"); b.className = "toast-action"; b.textContent = label; b.onclick = () => { t.hidden = true; fn(); }; t.appendChild(b); }
+  t.hidden = false; clearTimeout(showToast._t); showToast._t = setTimeout(() => { t.hidden = true; }, ms);
 }
 
-/* ---------- data ---------- */
+/* ---------------- load ---------------- */
 async function loadAll() {
-  const meta = await api.get("/api/meta");
-  state.statuses = meta.statuses;
+  state.statuses = (await api.get("/api/meta")).statuses;
   state.jobs = await api.get("/api/jobs");
   state.trash = await api.get("/api/trash");
-  $("#trash-count").textContent = state.trash.length;
-  renderFilters();
-  renderList();
   loadBackupStatus();
-  if (state.selectedId && byId(state.selectedId)) renderDetail(byId(state.selectedId));
+  render();
 }
-const byId = (id) => state.jobs.find((j) => j.id === id);
-
 async function loadBackupStatus() {
-  try {
-    const b = await api.get("/api/backups");
-    $("#backup-status").textContent = b.length
-      ? `Last backup: ${fmtWhen(b[0].created)} · ${b.length} kept`
-      : "No backups yet";
-  } catch { /* ignore */ }
+  try { const b = await api.get("/api/backups"); $("#backup-status").textContent = b.length ? `Last backup: ${fmtWhenIso(b[0].created)}` : "No backups yet"; } catch {}
 }
 
-/* ---------- filters ---------- */
-function renderFilters() {
-  const counts = { all: state.jobs.length };
-  for (const s of state.statuses) counts[s] = 0;
-  for (const j of state.jobs) counts[j.status] = (counts[j.status] || 0) + 1;
-  const tabs = ["all", ...state.statuses];
-  const nav = $("#filters");
-  nav.innerHTML = "";
-  for (const t of tabs) {
+/* ---------------- render router ---------------- */
+function render() {
+  $("#view-add").hidden = state.view !== "add";
+  $("#view-calendar").hidden = state.view !== "calendar";
+  document.querySelectorAll(".navlink").forEach((n) => n.classList.toggle("active", n.dataset.view === state.view));
+  if (state.view === "add") renderRecent(); else renderCalendar();
+}
+
+/* ---------------- Add view: recently added ---------------- */
+function renderRecent() {
+  const list = $("#recent-list");
+  const jobs = [...state.jobs].sort((a, b) => (b.created_at || "").localeCompare(a.created_at || "")).slice(0, 8);
+  $("#recent-empty").hidden = jobs.length !== 0;
+  list.hidden = jobs.length === 0;
+  list.innerHTML = "";
+  for (const j of jobs) {
+    const date = isoToDate(j.created_at);
     const b = document.createElement("button");
-    b.className = t === state.filter ? "active" : "";
-    b.innerHTML = `${cap(t)} <span class="count">${counts[t] || 0}</span>`;
-    b.onclick = () => { state.filter = t; renderFilters(); renderList(); syncTrashBtn(); };
-    nav.appendChild(b);
-  }
-  syncTrashBtn();
-}
-function syncTrashBtn() {
-  $("#trash-btn").classList.toggle("active", state.filter === "trash");
-}
-
-/* ---------- list ---------- */
-function renderList() {
-  const ul = $("#job-list");
-  ul.innerHTML = "";
-  if (state.filter === "trash") return renderTrash(ul);
-
-  const jobs = state.jobs.filter(
-    (j) => state.filter === "all" || j.status === state.filter
-  );
-  $("#empty-list").hidden = state.jobs.length !== 0;
-  jobs.forEach((j, i) => {
-    const li = document.createElement("li");
-    li.className = "job-card reveal" + (j.id === state.selectedId ? " selected" : "");
-    li.style.transitionDelay = Math.min(i * 40, 320) + "ms";
-    li.onclick = () => selectJob(j.id);
-    li.innerHTML = `
-      <h3>${esc(j.title || "Untitled role")}</h3>
-      <div class="company">${esc(j.company || "—")}</div>
-      <div class="card-foot">
-        <span class="pill ${j.status}">${cap(j.status)}</span>
-        ${j.location ? `<span class="loc">${esc(j.location)}</span>` : ""}
-        <span class="source-tag">${esc(j.source || "")}</span>
-      </div>`;
-    ul.appendChild(li);
-    if (revealObserver) revealObserver.observe(li); else li.classList.add("in");
-  });
-}
-
-function renderTrash(ul) {
-  $("#empty-list").hidden = state.trash.length !== 0;
-  $("#detail-empty").hidden = false;
-  $("#detail").hidden = true;
-  for (const j of state.trash) {
-    const li = document.createElement("li");
-    li.className = "job-card trashed";
-    li.innerHTML = `
-      <h3>${esc(j.title || "Untitled role")}</h3>
-      <div class="company">${esc(j.company || "—")}</div>
-      <div class="card-foot">
-        <span class="loc">Trashed ${fmtWhen(j.deleted_at)}</span>
-      </div>
-      <div class="trash-actions"></div>`;
-    const actions = $(".trash-actions", li);
-    const restore = document.createElement("button");
-    restore.className = "btn-ghost"; restore.textContent = "Restore";
-    restore.onclick = () => restoreJob(j.id);
-    const purge = document.createElement("button");
-    purge.className = "btn-danger"; purge.textContent = "Delete forever";
-    purge.onclick = () => purgeJob(j.id, j.title);
-    actions.append(restore, purge);
-    ul.appendChild(li);
+    b.className = "job-row";
+    b.onclick = () => openDrawer(j.id);
+    b.innerHTML = `${favBadge(j)}
+      <span class="job-main">
+        <span class="job-title">${esc(j.title || "Untitled role")}</span>
+        <span class="job-meta">${esc(srcLabel(j.source))}<span class="sep">·</span><span class="st st-${j.status}">${cap(j.status)}</span>${j.company ? `<span class="sep">·</span>${esc(j.company)}` : ""}</span>
+      </span>
+      <span class="job-right"><span>${date ? fmtShort(date) : ""}</span><span class="chev">${svg("chev", 18)}</span></span>`;
+    list.appendChild(b);
   }
 }
 
-function selectJob(id) {
+/* ---------------- Calendar view ---------------- */
+function renderCalendar() {
+  renderUpcoming();
+  $("#cal-title").textContent = `${MONTHS[state.calCursor.getMonth()]} ${state.calCursor.getFullYear()}`;
+  document.querySelectorAll(".seg-btn").forEach((s) => s.classList.toggle("active", s.dataset.mode === state.calMode));
+  const body = $("#cal-body");
+  if (state.calMode === "month") body.innerHTML = monthGrid();
+  else if (state.calMode === "week") body.innerHTML = weekGrid();
+  else body.innerHTML = listView();
+  body.querySelectorAll("[data-job]").forEach((el) => { el.onclick = () => openDrawer(+el.dataset.job); });
+}
+
+function eventsOn(d) { return state.jobs.filter((j) => sameDay(isoToDate(j.follow_up_date), d)); }
+
+function monthGrid() {
+  const cur = state.calCursor, today = new Date();
+  const first = new Date(cur.getFullYear(), cur.getMonth(), 1);
+  const start = new Date(first); start.setDate(1 - first.getDay());
+  let html = '<div class="cal-grid">' + DOW.map((d) => `<div class="cal-dow">${d}</div>`).join("");
+  for (let i = 0; i < 42; i++) {
+    const d = new Date(start); d.setDate(start.getDate() + i);
+    const out = d.getMonth() !== cur.getMonth();
+    const evs = eventsOn(d).map((j) => `<span class="cal-event" data-job="${j.id}"><span class="ce-title">${esc(j.title || "Job")}</span><span class="ce-tag">Follow up</span></span>`).join("");
+    html += `<div class="cal-cell${out ? " out" : ""}${sameDay(d, today) ? " today" : ""}"><span class="cal-daynum">${d.getDate()}</span>${evs}</div>`;
+  }
+  return html + "</div>";
+}
+
+function weekGrid() {
+  const cur = state.calCursor, today = new Date();
+  const base = state.calMode === "week" ? today : cur;
+  const start = new Date(base); start.setDate(base.getDate() - base.getDay());
+  let html = '<div class="cal-week">';
+  for (let i = 0; i < 7; i++) {
+    const d = new Date(start); d.setDate(start.getDate() + i);
+    const evs = eventsOn(d).map((j) => `<span class="cal-event" data-job="${j.id}"><span class="ce-title">${esc(j.title || "Job")}</span><span class="ce-tag">Follow up</span></span>`).join("");
+    html += `<div class="wk-col"><div class="wk-head${sameDay(d, today) ? " today" : ""}">${DOW[d.getDay()]} <span class="wk-num">${d.getDate()}</span></div>${evs}</div>`;
+  }
+  return html + "</div>";
+}
+
+function listView() {
+  const evs = state.jobs.filter((j) => j.follow_up_date).sort((a, b) => a.follow_up_date.localeCompare(b.follow_up_date));
+  if (!evs.length) return '<div class="empty"><p class="empty-title">No scheduled follow-ups</p><p class="muted">Open a job and set a follow-up date to see it here.</p></div>';
+  return '<div class="cal-listview">' + evs.map((j) => {
+    const d = isoToDate(j.follow_up_date);
+    return `<div class="li-row" data-job="${j.id}"><span class="li-date">${d.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" })}</span>${favBadge(j)}<span class="job-main"><span class="job-title">${esc(j.title || "Job")}</span><span class="job-meta">${esc(j.company || srcLabel(j.source))}<span class="sep">·</span>Follow up</span></span></div>`;
+  }).join("") + "</div>";
+}
+
+function renderUpcoming() {
+  const host = $("#upcoming"); host.innerHTML = "";
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const dated = state.jobs.filter((j) => isoToDate(j.follow_up_date) && isoToDate(j.follow_up_date) >= today)
+    .sort((a, b) => a.follow_up_date.localeCompare(b.follow_up_date));
+  const nodate = state.jobs.filter((j) => !j.follow_up_date);
+
+  if (!dated.length) host.innerHTML = '<p class="muted" style="margin-bottom:18px">No upcoming follow-ups. Set one on any job.</p>';
+  let lastLabel = "";
+  for (const j of dated) {
+    const d = isoToDate(j.follow_up_date);
+    const label = relLabel(d, today);
+    if (label !== lastLabel) { const l = document.createElement("div"); l.className = "up-group-label"; l.textContent = label; host.appendChild(l); lastLabel = label; }
+    host.appendChild(upRow(j, "Follow up"));
+  }
+  if (nodate.length) {
+    const l = document.createElement("div"); l.className = "up-group-label"; l.innerHTML = `No date <span class="up-count">${nodate.length}</span>`; host.appendChild(l);
+    nodate.forEach((j) => host.appendChild(upRow(j, cap(j.status))));
+  }
+}
+function relLabel(d, today) {
+  const diff = Math.round((d - today) / 86400000);
+  if (diff <= 0) return "Today";
+  if (diff === 1) return `Tomorrow · ${d.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" })}`;
+  return d.toLocaleDateString(undefined, { weekday: "long", month: "short", day: "numeric" });
+}
+function upRow(j, tag) {
+  const b = document.createElement("button"); b.className = "up-row"; b.onclick = () => openDrawer(j.id);
+  b.innerHTML = `${favBadge(j)}<span class="job-main"><span class="job-title">${esc(j.title || "Job")}</span><span class="job-meta">${esc(j.company || srcLabel(j.source))}<span class="sep">·</span>${esc(tag)}</span></span>`;
+  return b;
+}
+
+/* ---------------- Detail drawer ---------------- */
+function openDrawer(id) {
+  const j = byId(id); if (!j) return;
   state.selectedId = id;
-  renderList();
-  renderDetail(byId(id));
+  const opts = state.statuses.map((s) => `<option value="${s}"${s === j.status ? " selected" : ""}>${cap(s)}</option>`).join("");
+  const chips = [["Location", j.location], ["Salary", j.salary], ["Type", j.employment_type], ["Posted", (j.date_posted || "").slice(0, 10)]]
+    .filter(([, v]) => v).map(([k, v]) => `<span class="chip"><b>${k}:</b> ${esc(v)}</span>`).join("");
+  const d = $("#drawer");
+  d.innerHTML = `
+    <div class="drawer-head">
+      <div><h2>${esc(j.title || "Untitled role")}</h2><p class="d-company">${esc(srcLabel(j.source))}${j.company ? " · " + esc(j.company) : ""}</p></div>
+      <button class="icon-btn" id="drawer-close" aria-label="Close">${svg("x")}</button>
+    </div>
+    <div class="drawer-actions">
+      ${j.url && j.url.startsWith("http") ? `<a class="btn-ghost" href="${esc(j.url)}" target="_blank" rel="noopener">Open original</a>` : ""}
+      <button class="btn-ghost" id="d-md">Markdown</button>
+      <button class="btn-danger" id="d-del">Delete</button>
+    </div>
+    ${chips ? `<div class="chips">${chips}</div>` : ""}
+    <div class="d-label">Application</div>
+    <div class="grid2">
+      <div class="field"><label>Status</label><select id="f-status">${opts}</select></div>
+      <div class="field"><label>Date applied</label><input type="date" id="f-applied" value="${esc((j.date_applied || "").slice(0,10))}"></div>
+      <div class="field"><label>Follow-up</label><input type="date" id="f-follow" value="${esc((j.follow_up_date || "").slice(0,10))}"></div>
+      <div class="field"><label>Salary expectation</label><input type="text" id="f-salexp" value="${esc(j.salary_expectation || "")}" placeholder="$85,000"></div>
+      <div class="field"><label>Contact</label><input type="text" id="f-contact" value="${esc(j.contact || "")}" placeholder="Recruiter / email"></div>
+      <div class="field"><label>Interest</label><div class="stars" id="f-stars"></div></div>
+    </div>
+    <div class="d-label">Documents</div>
+    <div class="files">
+      <div class="file-slot" data-kind="resume"><label style="font-size:11.5px;color:var(--faint);text-transform:uppercase;letter-spacing:.04em;font-weight:600">Resume</label><div class="file-row" data-row="resume"></div></div>
+      <div class="file-slot" data-kind="cover_letter"><label style="font-size:11.5px;color:var(--faint);text-transform:uppercase;letter-spacing:.04em;font-weight:600">Cover letter</label><div class="file-row" data-row="cover_letter"></div></div>
+    </div>
+    <div class="field" style="margin-top:18px"><label>Notes</label><textarea id="f-notes" rows="4" placeholder="Interview prep, links, reminders…">${esc(j.notes || "")}</textarea></div>
+    <details class="desc"><summary>Job description</summary><div class="markdown" id="d-desc"></div></details>
+  `;
+  d.hidden = false; $("#scrim").hidden = false; paintIcons(d);
+
+  $("#drawer-close").onclick = closeDrawer;
+  $("#d-md").onclick = () => window.open(`/api/jobs/${id}/markdown`, "_blank");
+  $("#d-del").onclick = () => removeJob(id, j.title);
+  $("#f-status").onchange = (ev) => patch(id, { status: ev.target.value });
+  $("#f-applied").onchange = (ev) => patch(id, { date_applied: ev.target.value });
+  $("#f-follow").onchange = (ev) => patch(id, { follow_up_date: ev.target.value });
+  $("#f-salexp").onblur = (ev) => patch(id, { salary_expectation: ev.target.value.trim() });
+  $("#f-contact").onblur = (ev) => patch(id, { contact: ev.target.value.trim() });
+  $("#f-notes").onblur = (ev) => patch(id, { notes: ev.target.value.trim() });
+  renderStars(id, j.rating || 0);
+  renderFiles(id, j);
+  $("#d-desc").innerHTML = mdToHtml(j.description_md || "_No description captured._");
 }
-
-/* ---------- detail ---------- */
-function renderDetail(job) {
-  $("#detail-empty").hidden = !!job;
-  const host = $("#detail");
-  host.hidden = !job;
-  if (!job) { host.innerHTML = ""; return; }
-
-  const tpl = $("#detail-template").content.cloneNode(true);
-  $(".d-title", tpl).textContent = job.title || "Untitled role";
-  $(".d-company", tpl).textContent = job.company || "";
-  const src = $(".d-source", tpl); src.href = job.url || "#";
-  $(".d-md", tpl).onclick = () => window.open(`/api/jobs/${job.id}/markdown`, "_blank");
-  $(".d-delete", tpl).onclick = () => removeJob(job.id, job.title);
-
-  const chips = $(".d-meta", tpl);
-  const meta = [
-    ["Location", job.location], ["Remote", job.remote],
-    ["Type", job.employment_type], ["Salary", job.salary],
-    ["Posted", (job.date_posted || "").slice(0, 10)], ["Source", job.source],
-  ];
-  for (const [k, v] of meta) if (v) {
-    const c = document.createElement("span");
-    c.className = "chip"; c.innerHTML = `<b>${esc(k)}:</b> ${esc(v)}`;
-    chips.appendChild(c);
-  }
-
-  const sel = $(".d-status", tpl);
-  for (const s of state.statuses) {
-    const o = document.createElement("option");
-    o.value = s; o.textContent = cap(s); if (s === job.status) o.selected = true;
-    sel.appendChild(o);
-  }
-  sel.onchange = () => patch(job.id, { status: sel.value });
-
-  bindInput($(".d-applied", tpl), job.date_applied, (v) => patch(job.id, { date_applied: v }));
-  bindInput($(".d-followup", tpl), job.follow_up_date, (v) => patch(job.id, { follow_up_date: v }));
-  bindInput($(".d-salexp", tpl), job.salary_expectation, (v) => patch(job.id, { salary_expectation: v }));
-  bindInput($(".d-contact", tpl), job.contact, (v) => patch(job.id, { contact: v }));
-  bindInput($(".d-notes", tpl), job.notes, (v) => patch(job.id, { notes: v }));
-
-  renderStars($(".d-stars", tpl), job);
-  renderFiles(tpl, job);
-  $(".desc-body", tpl).innerHTML = mdToHtml(job.description_md || "_No description captured._");
-
-  host.innerHTML = "";
-  host.appendChild(tpl);
+function closeDrawer() { $("#drawer").hidden = true; $("#scrim").hidden = true; state.selectedId = null; }
+function renderStars(id, cur) {
+  const box = $("#f-stars"); box.innerHTML = "";
+  for (let i = 1; i <= 5; i++) { const s = document.createElement("span"); s.className = "star" + (i <= cur ? " on" : ""); s.textContent = "★"; s.onclick = () => patch(id, { rating: i === cur ? 0 : i }); box.appendChild(s); }
 }
-
-function bindInput(el, value, save) {
-  el.value = value || "";
-  const handler = () => save(el.value.trim());
-  if (el.type === "date") el.onchange = handler; else el.onblur = handler;
-}
-
-function renderStars(box, job) {
-  box.innerHTML = "";
-  const current = job.rating || 0;
-  for (let i = 1; i <= 5; i++) {
-    const s = document.createElement("span");
-    s.className = "star" + (i <= current ? " on" : "");
-    s.textContent = "★";
-    s.onclick = () => patch(job.id, { rating: i === current ? 0 : i });
-    box.appendChild(s);
-  }
-}
-
-function renderFiles(tpl, job) {
-  for (const slot of tpl.querySelectorAll(".file-slot")) {
-    const kind = slot.dataset.kind;
-    const row = $(".file-row", slot);
-    const name = job[`${kind}_name`];
-    row.innerHTML = "";
+function renderFiles(id, j) {
+  for (const kind of ["resume", "cover_letter"]) {
+    const row = $(`[data-row="${kind}"]`); const name = j[`${kind}_name`]; row.innerHTML = "";
     if (name) {
-      const tag = document.createElement("span");
-      tag.className = "file-name"; tag.textContent = name; row.appendChild(tag);
-      const dl = document.createElement("button");
-      dl.className = "link-btn"; dl.textContent = "download";
-      dl.onclick = () => window.open(`/api/jobs/${job.id}/file?kind=${kind}`, "_blank");
-      row.appendChild(dl);
-      const rm = document.createElement("button");
-      rm.className = "link-btn"; rm.textContent = "remove";
-      rm.onclick = () => removeFile(job.id, kind);
-      row.appendChild(rm);
+      row.innerHTML = `<span class="file-name">${esc(name)}</span>`;
+      const dl = mkBtn("download", () => window.open(`/api/jobs/${id}/file?kind=${kind}`, "_blank"));
+      const rm = mkBtn("remove", () => removeFile(id, kind)); row.append(dl, rm);
     } else {
-      const label = document.createElement("label");
-      label.className = "upload-label";
-      label.textContent = "Attach file";
-      const inp = document.createElement("input");
-      inp.type = "file";
-      inp.onchange = () => inp.files[0] && uploadFile(job.id, kind, inp.files[0]);
-      label.appendChild(inp); row.appendChild(label);
+      const lbl = document.createElement("label"); lbl.className = "upload-label"; lbl.textContent = "Attach file";
+      const inp = document.createElement("input"); inp.type = "file"; inp.onchange = () => inp.files[0] && uploadFile(id, kind, inp.files[0]);
+      lbl.appendChild(inp); row.appendChild(lbl);
     }
   }
 }
+function mkBtn(t, fn) { const b = document.createElement("button"); b.className = "link-btn"; b.textContent = t; b.onclick = fn; return b; }
 
-/* ---------- mutations ---------- */
+/* ---------------- mutations ---------------- */
 async function addJob(url) {
-  const btn = $("#add-btn");
-  btn.disabled = true; btn.textContent = "Fetching…";
-  try {
-    const job = await api.send("POST", "/api/jobs", { url });
-    $("#add-url").value = "";
-    if (state.filter === "trash") state.filter = "all";
-    await loadAll();
-    selectJob(job.id);
-    toast(`Added “${job.title || "job"}”.`);
-  } catch (e) { toast(e.message, true); }
-  finally { btn.disabled = false; btn.textContent = "Add job"; }
+  const btn = $("#add-btn"); btn.disabled = true; btn.textContent = "Fetching…";
+  try { const j = await api.send("POST", "/api/jobs", { url }); $("#add-url").value = ""; await loadAll(); toast(`Saved “${j.title || "job"}”.`); openDrawer(j.id); }
+  catch (err) { toast(err.message, true); }
+  finally { btn.disabled = false; btn.textContent = "Save job"; }
 }
-
 async function patch(id, fields) {
-  try {
-    const updated = await api.send("PATCH", `/api/jobs/${id}`, fields);
-    Object.assign(byId(id), updated);
-    renderFilters(); renderList();
-    if ("status" in fields) renderDetail(byId(id));
-  } catch (e) { toast(e.message, true); }
+  try { const u = await api.send("PATCH", `/api/jobs/${id}`, fields); Object.assign(byId(id), u); render(); if (!$("#drawer").hidden && state.selectedId === id) { /* keep drawer values */ } }
+  catch (err) { toast(err.message, true); }
 }
-
 async function removeJob(id, title) {
-  try {
-    await api.send("DELETE", `/api/jobs/${id}`); // soft delete -> trash
-    if (state.selectedId === id) { state.selectedId = null; renderDetail(null); }
-    await loadAll();
-    toastAction(`Moved “${title || "job"}” to Trash.`, "Undo", () => restoreJob(id, true));
-  } catch (e) { toast(e.message, true); }
+  try { await api.send("DELETE", `/api/jobs/${id}`); closeDrawer(); await loadAll(); toastUndo(`Moved “${title || "job"}” to Trash.`, () => restoreJob(id)); }
+  catch (err) { toast(err.message, true); }
 }
-
-async function restoreJob(id, quiet) {
-  try {
-    await api.send("POST", `/api/jobs/${id}/restore`);
-    await loadAll();
-    if (!quiet) toast("Restored from Trash.");
-    else toast("Restored.");
-  } catch (e) { toast(e.message, true); }
-}
-
+async function restoreJob(id) { try { await api.send("POST", `/api/jobs/${id}/restore`); await loadAll(); toast("Restored."); } catch (err) { toast(err.message, true); } }
 async function purgeJob(id, title) {
-  if (!confirm(`Permanently delete “${title || "this job"}” and its files?\nThis cannot be undone (a backup is kept).`)) return;
-  try {
-    await api.send("DELETE", `/api/jobs/${id}?purge=1`);
-    await loadAll();
-    toast("Permanently deleted.");
-  } catch (e) { toast(e.message, true); }
+  if (!confirm(`Permanently delete “${title || "this job"}” and its files? A backup is kept, but this can't be undone.`)) return;
+  try { await api.send("DELETE", `/api/jobs/${id}?purge=1`); await loadAll(); renderTrash(); toast("Permanently deleted."); } catch (err) { toast(err.message, true); }
 }
-
 function uploadFile(id, kind, file) {
-  const reader = new FileReader();
-  reader.onload = async () => {
-    const b64 = reader.result.split(",")[1];
-    try {
-      const updated = await api.send("POST", `/api/jobs/${id}/file`, {
-        kind, filename: file.name, content_b64: b64,
-      });
-      Object.assign(byId(id), updated);
-      renderDetail(byId(id));
-      toast(`${cap(kind.replace("_", " "))} attached.`);
-    } catch (e) { toast(e.message, true); }
-  };
-  reader.readAsDataURL(file);
+  const r = new FileReader();
+  r.onload = async () => { try { const u = await api.send("POST", `/api/jobs/${id}/file`, { kind, filename: file.name, content_b64: r.result.split(",")[1] }); Object.assign(byId(id), u); openDrawer(id); toast("Attached."); } catch (err) { toast(err.message, true); } };
+  r.readAsDataURL(file);
 }
+async function removeFile(id, kind) { try { const u = await api.send("DELETE", `/api/jobs/${id}/file?kind=${kind}`); Object.assign(byId(id), u); openDrawer(id); } catch (err) { toast(err.message, true); } }
 
-async function removeFile(id, kind) {
-  try {
-    const updated = await api.send("DELETE", `/api/jobs/${id}/file?kind=${kind}`);
-    Object.assign(byId(id), updated);
-    renderDetail(byId(id));
-  } catch (e) { toast(e.message, true); }
-}
-
-/* ---------- backups & data ---------- */
+/* ---------------- Data menu ---------------- */
+function toggleMenu(open) { const m = $("#data-menu"); const show = open ?? m.hidden; m.hidden = !show; $("#data-btn").setAttribute("aria-expanded", String(show)); }
 function exportBackup() { window.open("/api/export", "_blank"); }
-
-async function backupNow() {
-  try { await api.send("POST", "/api/backup", {}); await loadBackupStatus(); toast("Backup saved."); }
-  catch (e) { toast(e.message, true); }
-}
-
+async function backupNow() { try { await api.send("POST", "/api/backup", {}); loadBackupStatus(); toast("Backup saved."); } catch (err) { toast(err.message, true); } }
 function importBackup(file) {
-  const reader = new FileReader();
-  reader.onload = async () => {
-    let data;
-    try { data = JSON.parse(reader.result); }
-    catch { return toast("That file is not valid JSON.", true); }
-    try {
-      const res = await api.send("POST", "/api/import", data);
-      await loadAll();
-      toast(`Imported ${res.added} job(s); skipped ${res.skipped} already present.`);
-    } catch (e) { toast(e.message, true); }
-  };
-  reader.readAsText(file);
+  const r = new FileReader();
+  r.onload = async () => { let data; try { data = JSON.parse(r.result); } catch { return toast("Not valid JSON.", true); } try { const res = await api.send("POST", "/api/import", data); await loadAll(); toast(`Imported ${res.added}; skipped ${res.skipped}.`); } catch (err) { toast(err.message, true); } };
+  r.readAsText(file);
+}
+function setAppearance(mode) {
+  document.body.className = "ui-" + mode;
+  try { localStorage.setItem("jobtrail-appearance", mode); } catch {}
+  document.querySelectorAll(".appearance").forEach((a) => a.classList.toggle("sel", a.dataset.appearance === mode));
 }
 
-/* ---------- tiny markdown -> html ---------- */
+/* ---------------- Trash modal ---------------- */
+function openTrash() { renderTrash(); $("#trash-modal").hidden = false; }
+function renderTrash() {
+  const list = $("#trash-list"); list.innerHTML = ""; $("#trash-empty").hidden = state.trash.length !== 0; list.hidden = state.trash.length === 0;
+  for (const j of state.trash) {
+    const row = document.createElement("div"); row.className = "job-row"; row.style.cursor = "default";
+    row.innerHTML = `${favBadge(j)}<span class="job-main"><span class="job-title">${esc(j.title || "Job")}</span><span class="job-meta">${esc(j.company || srcLabel(j.source))}<span class="sep">·</span>Trashed ${esc(fmtWhenIso(j.deleted_at))}</span></span>`;
+    const acts = document.createElement("span"); acts.className = "trash-actions";
+    const rest = document.createElement("button"); rest.className = "btn-ghost"; rest.textContent = "Restore"; rest.onclick = async () => { await restoreJob(j.id); renderTrash(); };
+    const pur = document.createElement("button"); pur.className = "btn-danger"; pur.textContent = "Delete forever"; pur.onclick = () => purgeJob(j.id, j.title);
+    acts.append(rest, pur); row.appendChild(acts); list.appendChild(row);
+  }
+}
+
+/* ---------------- tiny markdown ---------------- */
 function mdToHtml(md) {
-  const lines = md.split("\n");
-  let html = "", inList = false;
-  const inline = (s) => esc(s)
-    .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
-    .replace(/(^|[^*])\*([^*]+?)\*/g, "$1<em>$2</em>")
-    .replace(/\[(.+?)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
-  for (let raw of lines) {
-    const line = raw.replace(/\s+$/, "");
-    const h = line.match(/^(#{1,6})\s+(.*)$/);
-    const li = line.match(/^[-*]\s+(.*)$/) || line.match(/^\d+\.\s+(.*)$/);
+  const lines = md.split("\n"); let html = "", inList = false;
+  const inline = (s) => esc(s).replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>").replace(/(^|[^*])\*([^*]+?)\*/g, "$1<em>$2</em>").replace(/\[(.+?)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+  for (const raw of lines) {
+    const line = raw.replace(/\s+$/, ""); const h = line.match(/^(#{1,6})\s+(.*)$/); const li = line.match(/^[-*]\s+(.*)$/) || line.match(/^\d+\.\s+(.*)$/);
     if (li) { if (!inList) { html += "<ul>"; inList = true; } html += `<li>${inline(li[1])}</li>`; continue; }
     if (inList) { html += "</ul>"; inList = false; }
-    if (h) { const n = h[1].length; html += `<h${n}>${inline(h[2])}</h${n}>`; }
-    else if (line.trim() === "---") { html += "<hr/>"; }
-    else if (line.trim() === "") { /* skip */ }
-    else { html += `<p>${inline(line)}</p>`; }
+    if (h) html += `<h${h[1].length}>${inline(h[2])}</h${h[1].length}>`; else if (line.trim() === "---") html += "<hr/>"; else if (line.trim()) html += `<p>${inline(line)}</p>`;
   }
-  if (inList) html += "</ul>";
-  return html;
+  if (inList) html += "</ul>"; return html;
 }
 
-/* ---------- utils ---------- */
-function esc(s) {
-  return String(s == null ? "" : s)
-    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
-}
-const cap = (s) => (s || "").charAt(0).toUpperCase() + (s || "").slice(1);
-function fmtWhen(iso) {
-  if (!iso) return "—";
-  const d = new Date(iso);
-  if (isNaN(d)) return iso;
-  return d.toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
-}
+/* ---------------- boot ---------------- */
+function boot() {
+  paintIcons();
+  try { setAppearance(localStorage.getItem("jobtrail-appearance") || "calm"); } catch { setAppearance("calm"); }
 
-/* ---------- boot ---------- */
-$("#add-form").addEventListener("submit", (e) => {
-  e.preventDefault();
-  const url = $("#add-url").value.trim();
-  if (url) addJob(url);
-});
-$("#trash-btn").addEventListener("click", () => {
-  state.filter = state.filter === "trash" ? "all" : "trash";
-  state.selectedId = null; renderDetail(null);
-  renderFilters(); renderList();
-});
-$("#export-btn").addEventListener("click", exportBackup);
-$("#backup-btn").addEventListener("click", backupNow);
-$("#import-file").addEventListener("change", (e) => {
-  if (e.target.files[0]) { importBackup(e.target.files[0]); e.target.value = ""; }
-});
-loadAll().catch((e) => toast("Could not load: " + e.message, true));
+  document.querySelectorAll("[data-view]").forEach((b) => b.addEventListener("click", () => { state.view = b.dataset.view; render(); }));
+  $("#add-form").addEventListener("submit", (ev) => { ev.preventDefault(); const u = $("#add-url").value.trim(); if (u) addJob(u); });
+
+  $("#data-btn").addEventListener("click", (ev) => { ev.stopPropagation(); toggleMenu(); });
+  document.addEventListener("click", (ev) => { if (!ev.target.closest(".data-wrap")) toggleMenu(false); });
+  $("#data-menu").addEventListener("click", (ev) => {
+    const item = ev.target.closest("[data-act], .appearance"); if (!item) return;
+    if (item.dataset.appearance) { setAppearance(item.dataset.appearance); return; }
+    toggleMenu(false);
+    const act = item.dataset.act;
+    if (act === "backup") backupNow(); else if (act === "export") exportBackup(); else if (act === "trash") openTrash();
+  });
+  $("#import-file").addEventListener("change", (ev) => { if (ev.target.files[0]) { importBackup(ev.target.files[0]); ev.target.value = ""; } });
+
+  $("#cal-prev").addEventListener("click", () => { state.calCursor = new Date(state.calCursor.getFullYear(), state.calCursor.getMonth() - 1, 1); renderCalendar(); });
+  $("#cal-next").addEventListener("click", () => { state.calCursor = new Date(state.calCursor.getFullYear(), state.calCursor.getMonth() + 1, 1); renderCalendar(); });
+  $("#cal-today").addEventListener("click", () => { state.calCursor = startOfMonth(new Date()); renderCalendar(); });
+  document.querySelectorAll(".seg-btn").forEach((s) => s.addEventListener("click", () => { state.calMode = s.dataset.mode; renderCalendar(); }));
+
+  $("#scrim").addEventListener("click", closeDrawer);
+  $("#trash-close").addEventListener("click", () => { $("#trash-modal").hidden = true; });
+  $("#trash-modal").addEventListener("click", (ev) => { if (ev.target.id === "trash-modal") $("#trash-modal").hidden = true; });
+  document.addEventListener("keydown", (ev) => { if (ev.key === "Escape") { closeDrawer(); $("#trash-modal").hidden = true; toggleMenu(false); } });
+
+  loadAll().catch((err) => toast("Could not load: " + err.message, true));
+}
+boot();
