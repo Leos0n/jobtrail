@@ -48,6 +48,6 @@ def list_tabs(sid: str, token: str) -> list[str]:
 
 def read_tab(sid: str, tab: str, token: str) -> list[list]:
     """Return a tab's values as a list of rows (each row a list of cells)."""
-    rng = urllib.parse.quote(f"'{tab}'")
+    rng = urllib.parse.quote(f"'{tab}'", safe="")
     url = f"{API}/{sid}/values/{rng}?majorDimension=ROWS&valueRenderOption=FORMATTED_VALUE"
     return _get(url, token).get("values", [])

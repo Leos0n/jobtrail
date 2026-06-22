@@ -120,10 +120,88 @@ def _job_key(url, company, title, tab):
     return "gsheet-" + hashlib.sha1(basis.encode()).hexdigest()[:12]
 
 
+_MONTHS = r"(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*"
+DATE_HEADER_RE = re.compile(rf"^\s*{_MONTHS}\.?\s+\d{{1,2}}(?:st|nd|rd|th)?,?\s*\d{{4}}\b", re.I)
+
+
+def _cell(c):
+    return "" if c is None else str(c)
+
+
+def parse_header_date(text):
+    m = re.search(rf"({_MONTHS})\.?\s+(\d{{1,2}})(?:st|nd|rd|th)?,?\s*(\d{{4}})", text, re.I)
+    if not m:
+        return None
+    try:
+        stamp = f"{m.group(1)[:3].title()} {int(m.group(2))} {m.group(3)}"
+        return datetime.strptime(stamp, "%b %d %Y").strftime("%Y-%m-%d")
+    except ValueError:
+        return None
+
+
+def match_status(value):
+    """Return a canonical status only if the cell clearly *is* a status word."""
+    n = _norm(value)
+    if not n:
+        return None
+    for status, syns in STATUS_SYNONYMS.items():
+        if n == status or n in [_norm(s) for s in syns]:
+            return status
+    return None
+
+
+def looks_grouped(values):
+    return sum(1 for r in values if r and DATE_HEADER_RE.match(_cell(r[0]).strip())) >= 2
+
+
+def _values_to_jobs_grouped(values, tab, default_status):
+    """Parse the date-grouped layout: a date header row, then one job per row
+    (Company, Role, Location?, Link?, Status?), repeating per day."""
+    jobs, cur_date = [], None
+    for row in values:
+        cells = [_cell(c).strip() for c in row]
+        if not any(cells):
+            continue
+        if DATE_HEADER_RE.match(cells[0]):
+            cur_date = parse_header_date(cells[0])
+            continue
+        company = cells[0]
+        if not company:
+            continue
+        title = cells[1] if len(cells) > 1 and cells[1] else None
+        url = location = status = None
+        for c in cells[2:]:
+            if not c:
+                continue
+            if c.lower().startswith("http"):
+                url = c
+            elif match_status(c):
+                status = match_status(c)
+            elif location is None:
+                location = c
+        job = {
+            "source": "google-sheet",
+            "company": company,
+            "title": title,
+            "location": location,
+            "status": status or default_status or "applied",
+            "date_applied": cur_date,
+            "url": url,
+        }
+        job["job_key"] = _job_key(url, company, title, f"{tab}|{cur_date}")
+        if not job["url"]:
+            job["url"] = f"gsheet://{job['job_key']}"
+        jobs.append({k: v for k, v in job.items() if v is not None})
+    return {"mapping": {"layout": "date-grouped"}, "jobs": jobs, "warnings": []}
+
+
 def values_to_jobs(values, default_status=None, tab=None, mapping=None):
-    """Convert a tab's values (list of rows; row 0 = headers) into job dicts."""
+    """Convert a tab's values into job dicts. Handles both a standard table
+    (row 0 = column headers) and a date-grouped layout (auto-detected)."""
     if not values:
         return {"mapping": {}, "jobs": [], "warnings": ["empty tab"]}
+    if mapping is None and looks_grouped(values):
+        return _values_to_jobs_grouped(values, tab, default_status)
     headers = [str(h).strip() for h in values[0]]
     mapping = mapping or detect_mapping(headers)
     warnings = []
