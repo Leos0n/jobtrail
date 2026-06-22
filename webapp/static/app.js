@@ -17,6 +17,7 @@ const ICONS = {
   chev: '<path d="m9 6 6 6-6 6"/>',
   x: '<path d="M6 6l12 12M18 6 6 18"/>',
   external: '<path d="M14 5h5v5M19 5l-8 8M12 5H6a1 1 0 0 0-1 1v12a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-6"/>',
+  search: '<circle cx="11" cy="11" r="7"/><path d="m20 20-3.4-3.4"/>',
 };
 function svg(name, size = 20) {
   return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[name] || ""}</svg>`;
@@ -91,11 +92,29 @@ function render() {
 }
 
 /* ---------------- Add view: recently added ---------------- */
+function computeStats() {
+  const jobs = state.jobs;
+  const weekAgo = new Date(); weekAgo.setHours(0, 0, 0, 0); weekAgo.setDate(weekAgo.getDate() - 6);
+  let week = 0; const by = {};
+  for (const j of jobs) {
+    const d = isoToDate(j.date_applied) || isoToDate(j.created_at);
+    if (d && d >= weekAgo) week++;
+    by[j.status] = (by[j.status] || 0) + 1;
+  }
+  return { total: jobs.length, week, interviewing: by.interviewing || 0, offer: by.offer || 0 };
+}
+function renderStats() {
+  const s = computeStats();
+  $("#stats").innerHTML = [["Total", s.total], ["This week", s.week], ["Interviewing", s.interviewing], ["Offers", s.offer]]
+    .map(([label, val]) => `<div class="stat"><span class="stat-val">${val}</span><span class="stat-label">${esc(label)}</span></div>`).join("");
+}
 function renderRecent() {
+  renderStats();
   const list = $("#recent-list");
-  const jobs = [...state.jobs].sort((a, b) => (b.created_at || "").localeCompare(a.created_at || "")).slice(0, 8);
-  $("#recent-empty").hidden = jobs.length !== 0;
-  list.hidden = jobs.length === 0;
+  const jobs = [...state.jobs].sort((a, b) => (b.created_at || "").localeCompare(a.created_at || "")).slice(0, 6);
+  $("#recent-count").textContent = state.jobs.length ? `${jobs.length} of ${state.jobs.length}` : "";
+  $("#recent-empty").hidden = state.jobs.length !== 0;
+  list.hidden = state.jobs.length === 0;
   list.innerHTML = "";
   for (const j of jobs) {
     const date = isoToDate(j.created_at);
@@ -247,19 +266,36 @@ function renderUpcoming() {
   const monthApps = state.jobs
     .filter((j) => { const d = isoToDate(j.date_applied); return d && d.getFullYear() === cur.getFullYear() && d.getMonth() === cur.getMonth(); })
     .sort((a, b) => b.date_applied.localeCompare(a.date_applied));
-  if (monthApps.length) {
-    addLabel(`Applied in ${MONTHS[cur.getMonth()]}`, monthApps.length);
-    let lastDay = "";
-    for (const j of monthApps.slice(0, 60)) {
-      const d = isoToDate(j.date_applied);
-      const dl = d.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" });
-      if (dl !== lastDay) { const dh = document.createElement("div"); dh.className = "up-day"; dh.textContent = dl; host.appendChild(dh); lastDay = dl; }
-      host.appendChild(upRow(j, "Applied"));
-    }
-    if (monthApps.length > 60) addLabel(`+${monthApps.length - 60} more this month`);
-  } else if (!followUps.length) {
-    host.innerHTML = `<p class="muted" style="margin-bottom:18px">No applications in ${MONTHS[cur.getMonth()]} ${cur.getFullYear()}. Use the ‹ › arrows to browse other months.</p>`;
+
+  if (!monthApps.length) {
+    if (!followUps.length) host.innerHTML = `<p class="muted" style="margin-bottom:18px">No applications in ${MONTHS[cur.getMonth()]} ${cur.getFullYear()}. Use the ‹ › arrows to browse other months.</p>`;
+    return;
   }
+
+  const by = {}; for (const j of monthApps) by[j.status] = (by[j.status] || 0) + 1;
+  addLabel(`Applied in ${MONTHS[cur.getMonth()]}`);
+  const summary = document.createElement("div"); summary.className = "month-summary";
+  summary.innerHTML = `<span class="ms-chip"><b>${monthApps.length}</b> applied</span>`
+    + (by.interviewing ? `<span class="ms-chip"><b>${by.interviewing}</b> interviewing</span>` : "")
+    + (by.offer ? `<span class="ms-chip"><b>${by.offer}</b> offer${by.offer > 1 ? "s" : ""}</span>` : "")
+    + (by.rejected ? `<span class="ms-chip"><b>${by.rejected}</b> rejected</span>` : "");
+  host.appendChild(summary);
+
+  const groups = []; let cd = "";
+  for (const j of monthApps) {
+    const dl = isoToDate(j.date_applied).toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" });
+    if (dl !== cd) { groups.push({ label: dl, jobs: [] }); cd = dl; }
+    groups[groups.length - 1].jobs.push(j);
+  }
+  groups.forEach((g, gi) => {
+    const grp = document.createElement("div"); grp.className = "day-group" + (gi === 0 ? " open" : "");
+    const head = document.createElement("button"); head.className = "day-head"; head.setAttribute("aria-expanded", gi === 0 ? "true" : "false");
+    head.innerHTML = `<span class="dh-label">${esc(g.label)}</span><span class="day-count">${g.jobs.length}</span><span class="day-chev">${svg("chev", 16)}</span>`;
+    head.onclick = () => { const open = grp.classList.toggle("open"); head.setAttribute("aria-expanded", String(open)); };
+    const box = document.createElement("div"); box.className = "day-jobs";
+    g.jobs.forEach((j) => box.appendChild(upRow(j, "Applied")));
+    grp.append(head, box); host.appendChild(grp);
+  });
 }
 function relLabel(d, today) {
   const diff = Math.round((d - today) / 86400000);
@@ -419,6 +455,36 @@ function mdToHtml(md) {
   if (inList) html += "</ul>"; return html;
 }
 
+/* ---------------- search ---------------- */
+function searchOpen() { return !$("#search-panel").hidden; }
+function openSearch() {
+  $("#search-scrim").hidden = false; $("#search-panel").hidden = false;
+  const inp = $("#search-input"); inp.value = ""; renderSearchResults("");
+  setTimeout(() => inp.focus(), 0);
+}
+function closeSearch() { $("#search-scrim").hidden = true; $("#search-panel").hidden = true; }
+function renderSearchResults(q) {
+  const host = $("#search-results");
+  q = (q || "").trim().toLowerCase();
+  if (!q) { host.innerHTML = `<p class="search-hint">Type to search your ${state.jobs.length} applications.</p>`; return; }
+  const matches = state.jobs.filter((j) =>
+    [j.title, j.company, j.location, j.status, j.notes, j.source].some((f) => (f || "").toLowerCase().includes(q))
+  ).slice(0, 40);
+  if (!matches.length) { host.innerHTML = `<p class="search-hint">No matches for “${esc(q)}”.</p>`; return; }
+  host.innerHTML = matches.map((j, i) =>
+    `<button class="search-result${i === 0 ? " active" : ""}" data-job="${j.id}">${favBadge(j)}<span class="job-main"><span class="job-title">${esc(j.title || j.company || "Job")}</span><span class="job-meta">${esc(j.company || srcLabel(j.source))}<span class="sep">·</span><span class="st st-${j.status}">${cap(j.status)}</span>${j.date_applied ? `<span class="sep">·</span>${fmtShort(isoToDate(j.date_applied))}` : ""}</span></span></button>`
+  ).join("");
+  host.querySelectorAll("[data-job]").forEach((el) => { el.onclick = () => { closeSearch(); openDrawer(+el.dataset.job); }; });
+}
+function searchNav(dir) {
+  const results = [...$("#search-results").querySelectorAll(".search-result")];
+  if (!results.length) return;
+  let idx = results.findIndex((r) => r.classList.contains("active"));
+  idx = Math.max(0, Math.min(results.length - 1, (idx < 0 ? 0 : idx) + dir));
+  results.forEach((r) => r.classList.remove("active"));
+  results[idx].classList.add("active"); results[idx].scrollIntoView({ block: "nearest" });
+}
+
 /* ---------------- boot ---------------- */
 function boot() {
   paintIcons();
@@ -474,7 +540,30 @@ function boot() {
   $("#scrim").addEventListener("click", closeDrawer);
   $("#trash-close").addEventListener("click", () => { $("#trash-modal").hidden = true; });
   $("#trash-modal").addEventListener("click", (ev) => { if (ev.target.id === "trash-modal") $("#trash-modal").hidden = true; });
-  document.addEventListener("keydown", (ev) => { if (ev.key === "Escape") { closeDrawer(); $("#trash-modal").hidden = true; toggleMenu(false); } });
+  document.addEventListener("keydown", (ev) => { if (ev.key === "Escape") { closeDrawer(); closeSearch(); $("#trash-modal").hidden = true; toggleMenu(false); } });
+
+  $("#search-btn").addEventListener("click", openSearch);
+  $("#search-scrim").addEventListener("click", closeSearch);
+  $("#search-input").addEventListener("input", (ev) => renderSearchResults(ev.target.value));
+  $("#search-input").addEventListener("keydown", (ev) => {
+    if (ev.key === "ArrowDown") { ev.preventDefault(); searchNav(1); }
+    else if (ev.key === "ArrowUp") { ev.preventDefault(); searchNav(-1); }
+    else if (ev.key === "Enter") { ev.preventDefault(); const a = $("#search-results .search-result.active"); if (a) a.click(); }
+  });
+  document.addEventListener("keydown", (ev) => {
+    const typing = /^(input|textarea|select)$/i.test(ev.target.tagName) || ev.target.isContentEditable;
+    if ((ev.metaKey || ev.ctrlKey) && ev.key.toLowerCase() === "k") { ev.preventDefault(); searchOpen() ? closeSearch() : openSearch(); }
+    else if (ev.key === "/" && !typing && !searchOpen()) { ev.preventDefault(); openSearch(); }
+  });
+
+  const recentSection = $(".recent");
+  const applyRecentCollapsed = (c) => { recentSection.classList.toggle("collapsed", c); $("#recent-toggle").textContent = c ? "Show" : "Hide"; $("#recent-toggle").setAttribute("aria-expanded", String(!c)); };
+  try { applyRecentCollapsed(localStorage.getItem("recent-collapsed") === "1"); } catch {}
+  $("#recent-toggle").addEventListener("click", () => {
+    const c = !recentSection.classList.contains("collapsed");
+    applyRecentCollapsed(c);
+    try { localStorage.setItem("recent-collapsed", c ? "1" : "0"); } catch {}
+  });
 
   loadAll().catch((err) => toast("Could not load: " + err.message, true));
 }
