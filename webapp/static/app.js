@@ -34,12 +34,15 @@ const api = {
 async function e(r) { try { return new Error((await r.json()).error || r.statusText); } catch { return new Error(r.statusText); } }
 
 /* ---------------- state ---------------- */
-const state = { jobs: [], trash: [], statuses: [], view: "add", calMode: "month", calCursor: startOfMonth(new Date()), selectedId: null };
+const state = { jobs: [], trash: [], statuses: [], view: "add", calMode: "month", calCursor: startOfMonth(new Date()), calDay: startOfDay(new Date()), selectedId: null };
 
 /* ---------------- utils ---------------- */
 function esc(s) { return String(s == null ? "" : s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;"); }
 const cap = (s) => (s || "").charAt(0).toUpperCase() + (s || "").slice(1);
 function startOfMonth(d) { return new Date(d.getFullYear(), d.getMonth(), 1); }
+function startOfDay(d) { return new Date(d.getFullYear(), d.getMonth(), d.getDate()); }
+function isoDay(d) { return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; }
+function fmtDayLong(d) { return d.toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric", year: "numeric" }); }
 function isoToDate(s) { if (!s) return null; const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(s); return m ? new Date(+m[1], +m[2] - 1, +m[3]) : null; }
 function sameDay(a, b) { return a && b && a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate(); }
 const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
@@ -110,15 +113,53 @@ function renderRecent() {
 }
 
 /* ---------------- Calendar view ---------------- */
+function openDayView(d) {
+  state.calMode = "day";
+  state.calDay = startOfDay(d);
+  renderCalendar();
+}
+
+function jobsAppliedOn(d) {
+  return state.jobs
+    .filter((j) => { const a = isoToDate(j.date_applied); return a && sameDay(a, d); })
+    .sort((a, b) => (a.company || a.title || "").localeCompare(b.company || b.title || ""));
+}
+
 function renderCalendar() {
   renderUpcoming();
-  $("#cal-title").textContent = `${MONTHS[state.calCursor.getMonth()]} ${state.calCursor.getFullYear()}`;
   document.querySelectorAll(".seg-btn").forEach((s) => s.classList.toggle("active", s.dataset.mode === state.calMode));
   const body = $("#cal-body");
-  if (state.calMode === "month") body.innerHTML = monthGrid();
-  else if (state.calMode === "week") body.innerHTML = weekGrid();
-  else body.innerHTML = listView();
+  if (state.calMode === "day") {
+    state.calDay = startOfDay(state.calDay || new Date());
+    $("#cal-title").textContent = fmtDayLong(state.calDay);
+    body.innerHTML = dayView(state.calDay);
+  } else {
+    $("#cal-title").textContent = `${MONTHS[state.calCursor.getMonth()]} ${state.calCursor.getFullYear()}`;
+    if (state.calMode === "month") body.innerHTML = monthGrid();
+    else if (state.calMode === "week") body.innerHTML = weekGrid();
+    else body.innerHTML = listView();
+    bindCalendarDayClicks(body);
+  }
   body.querySelectorAll("[data-job]").forEach((el) => { el.onclick = () => openDrawer(+el.dataset.job); });
+}
+
+function bindCalendarDayClicks(body) {
+  body.querySelectorAll(".cal-cell[data-date]").forEach((cell) => {
+    cell.addEventListener("dblclick", (ev) => {
+      if (ev.target.closest("[data-job]")) return;
+      openDayView(isoToDate(cell.dataset.date));
+    });
+    const num = cell.querySelector(".cal-daynum");
+    if (num) num.addEventListener("click", (ev) => { ev.stopPropagation(); openDayView(isoToDate(cell.dataset.date)); });
+  });
+  body.querySelectorAll(".wk-col[data-date]").forEach((col) => {
+    col.addEventListener("dblclick", (ev) => {
+      if (ev.target.closest("[data-job]")) return;
+      openDayView(isoToDate(col.dataset.date));
+    });
+    const head = col.querySelector(".wk-head");
+    if (head) head.addEventListener("click", (ev) => { ev.stopPropagation(); openDayView(isoToDate(col.dataset.date)); });
+  });
 }
 
 function jobEvents(j) {
@@ -147,7 +188,7 @@ function monthGrid() {
     const events = eventsOn(d);
     const evs = events.slice(0, 3).map(calEventChip).join("");
     const more = events.length > 3 ? `<span class="cal-more">+${events.length - 3} more</span>` : "";
-    html += `<div class="cal-cell${out ? " out" : ""}${sameDay(d, today) ? " today" : ""}"><span class="cal-daynum">${d.getDate()}</span>${evs}${more}</div>`;
+    html += `<div class="cal-cell${out ? " out" : ""}${sameDay(d, today) ? " today" : ""}" data-date="${isoDay(d)}"><span class="cal-daynum" title="View this day">${d.getDate()}</span>${evs}${more}</div>`;
   }
   return html + "</div>";
 }
@@ -160,9 +201,19 @@ function weekGrid() {
   for (let i = 0; i < 7; i++) {
     const d = new Date(start); d.setDate(start.getDate() + i);
     const evs = eventsOn(d).map(calEventChip).join("");
-    html += `<div class="wk-col"><div class="wk-head${sameDay(d, today) ? " today" : ""}">${DOW[d.getDay()]} <span class="wk-num">${d.getDate()}</span></div>${evs}</div>`;
+    html += `<div class="wk-col" data-date="${isoDay(d)}"><div class="wk-head${sameDay(d, today) ? " today" : ""}" title="View this day">${DOW[d.getDay()]} <span class="wk-num">${d.getDate()}</span></div>${evs}</div>`;
   }
   return html + "</div>";
+}
+
+function dayView(day) {
+  const jobs = jobsAppliedOn(day);
+  if (!jobs.length) {
+    return `<div class="empty"><p class="empty-title">No applications</p><p class="muted">Nothing applied on ${esc(fmtDayLong(day))}.</p></div>`;
+  }
+  return `<div class="cal-dayview"><div class="day-summary">${jobs.length} application${jobs.length === 1 ? "" : "s"}</div>` +
+    jobs.map((j) => `<button type="button" class="day-job-row" data-job="${j.id}">${favBadge(j)}<span class="job-main"><span class="job-title">${esc(j.title || "Untitled role")}</span><span class="job-meta">${esc(j.company || srcLabel(j.source))}<span class="sep">·</span><span class="st st-${j.status}">${cap(j.status)}</span></span></span><span class="chev">${svg("chev", 18)}</span></button>`).join("") +
+    "</div>";
 }
 
 function listView() {
@@ -391,10 +442,34 @@ function boot() {
   });
   $("#import-file").addEventListener("change", (ev) => { if (ev.target.files[0]) { importBackup(ev.target.files[0]); ev.target.value = ""; toggleMenu(false); } });
 
-  $("#cal-prev").addEventListener("click", () => { state.calCursor = new Date(state.calCursor.getFullYear(), state.calCursor.getMonth() - 1, 1); renderCalendar(); });
-  $("#cal-next").addEventListener("click", () => { state.calCursor = new Date(state.calCursor.getFullYear(), state.calCursor.getMonth() + 1, 1); renderCalendar(); });
-  $("#cal-today").addEventListener("click", () => { state.calCursor = startOfMonth(new Date()); renderCalendar(); });
-  document.querySelectorAll(".seg-btn").forEach((s) => s.addEventListener("click", () => { state.calMode = s.dataset.mode; renderCalendar(); }));
+  $("#cal-prev").addEventListener("click", () => {
+    if (state.calMode === "day") {
+      const d = state.calDay || startOfDay(new Date());
+      state.calDay = new Date(d.getFullYear(), d.getMonth(), d.getDate() - 1);
+    } else {
+      state.calCursor = new Date(state.calCursor.getFullYear(), state.calCursor.getMonth() - 1, 1);
+    }
+    renderCalendar();
+  });
+  $("#cal-next").addEventListener("click", () => {
+    if (state.calMode === "day") {
+      const d = state.calDay || startOfDay(new Date());
+      state.calDay = new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1);
+    } else {
+      state.calCursor = new Date(state.calCursor.getFullYear(), state.calCursor.getMonth() + 1, 1);
+    }
+    renderCalendar();
+  });
+  $("#cal-today").addEventListener("click", () => {
+    if (state.calMode === "day") state.calDay = startOfDay(new Date());
+    else state.calCursor = startOfMonth(new Date());
+    renderCalendar();
+  });
+  document.querySelectorAll(".seg-btn").forEach((s) => s.addEventListener("click", () => {
+    state.calMode = s.dataset.mode;
+    if (state.calMode === "day") state.calDay = startOfDay(new Date());
+    renderCalendar();
+  }));
 
   $("#scrim").addEventListener("click", closeDrawer);
   $("#trash-close").addEventListener("click", () => { $("#trash-modal").hidden = true; });
