@@ -571,5 +571,17 @@ function boot() {
   });
 
   loadAll().catch((err) => toast("Could not load: " + err.message, true));
+
+  // Keep the page fresh: the backend syncs Google Sheets into the DB on its own
+  // schedule, but an open tab used to never re-read it. Refresh quietly on a
+  // timer and when the tab regains focus — skipping moments that would disrupt
+  // active editing (open drawer or search).
+  function refreshQuietly() {
+    if (document.hidden) return;
+    if (!$("#drawer").hidden || !$("#search-panel").hidden) return;
+    loadAll().catch(() => {});
+  }
+  setInterval(refreshQuietly, 60000);
+  document.addEventListener("visibilitychange", () => { if (!document.hidden) refreshQuietly(); });
 }
 boot();
