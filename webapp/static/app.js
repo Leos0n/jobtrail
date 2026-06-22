@@ -121,7 +121,20 @@ function renderCalendar() {
   body.querySelectorAll("[data-job]").forEach((el) => { el.onclick = () => openDrawer(+el.dataset.job); });
 }
 
-function eventsOn(d) { return state.jobs.filter((j) => sameDay(isoToDate(j.follow_up_date), d)); }
+function jobEvents(j) {
+  const out = [];
+  const a = isoToDate(j.date_applied); if (a) out.push({ job: j, date: a, kind: "applied", label: "Applied" });
+  const f = isoToDate(j.follow_up_date); if (f) out.push({ job: j, date: f, kind: "follow", label: "Follow up" });
+  return out;
+}
+function eventsOn(d) {
+  const out = [];
+  for (const j of state.jobs) for (const e of jobEvents(j)) if (sameDay(e.date, d)) out.push(e);
+  return out;
+}
+function calEventChip(e) {
+  return `<span class="cal-event ${e.kind}" data-job="${e.job.id}"><span class="ce-title">${esc(e.job.company || e.job.title || "Job")}</span><span class="ce-tag">${e.label}</span></span>`;
+}
 
 function monthGrid() {
   const cur = state.calCursor, today = new Date();
@@ -131,8 +144,10 @@ function monthGrid() {
   for (let i = 0; i < 42; i++) {
     const d = new Date(start); d.setDate(start.getDate() + i);
     const out = d.getMonth() !== cur.getMonth();
-    const evs = eventsOn(d).map((j) => `<span class="cal-event" data-job="${j.id}"><span class="ce-title">${esc(j.title || "Job")}</span><span class="ce-tag">Follow up</span></span>`).join("");
-    html += `<div class="cal-cell${out ? " out" : ""}${sameDay(d, today) ? " today" : ""}"><span class="cal-daynum">${d.getDate()}</span>${evs}</div>`;
+    const events = eventsOn(d);
+    const evs = events.slice(0, 3).map(calEventChip).join("");
+    const more = events.length > 3 ? `<span class="cal-more">+${events.length - 3} more</span>` : "";
+    html += `<div class="cal-cell${out ? " out" : ""}${sameDay(d, today) ? " today" : ""}"><span class="cal-daynum">${d.getDate()}</span>${evs}${more}</div>`;
   }
   return html + "</div>";
 }
@@ -144,39 +159,55 @@ function weekGrid() {
   let html = '<div class="cal-week">';
   for (let i = 0; i < 7; i++) {
     const d = new Date(start); d.setDate(start.getDate() + i);
-    const evs = eventsOn(d).map((j) => `<span class="cal-event" data-job="${j.id}"><span class="ce-title">${esc(j.title || "Job")}</span><span class="ce-tag">Follow up</span></span>`).join("");
+    const evs = eventsOn(d).map(calEventChip).join("");
     html += `<div class="wk-col"><div class="wk-head${sameDay(d, today) ? " today" : ""}">${DOW[d.getDay()]} <span class="wk-num">${d.getDate()}</span></div>${evs}</div>`;
   }
   return html + "</div>";
 }
 
 function listView() {
-  const evs = state.jobs.filter((j) => j.follow_up_date).sort((a, b) => a.follow_up_date.localeCompare(b.follow_up_date));
-  if (!evs.length) return '<div class="empty"><p class="empty-title">No scheduled follow-ups</p><p class="muted">Open a job and set a follow-up date to see it here.</p></div>';
-  return '<div class="cal-listview">' + evs.map((j) => {
-    const d = isoToDate(j.follow_up_date);
-    return `<div class="li-row" data-job="${j.id}"><span class="li-date">${d.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" })}</span>${favBadge(j)}<span class="job-main"><span class="job-title">${esc(j.title || "Job")}</span><span class="job-meta">${esc(j.company || srcLabel(j.source))}<span class="sep">·</span>Follow up</span></span></div>`;
+  const evs = [];
+  for (const j of state.jobs) for (const e of jobEvents(j)) evs.push(e);
+  evs.sort((a, b) => b.date - a.date);
+  if (!evs.length) return '<div class="empty"><p class="empty-title">No dated activity</p><p class="muted">Apply dates from your sheet will appear here.</p></div>';
+  return '<div class="cal-listview">' + evs.map((e) => {
+    const j = e.job;
+    return `<div class="li-row" data-job="${j.id}"><span class="li-date">${e.date.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric", year: "numeric" })}</span>${favBadge(j)}<span class="job-main"><span class="job-title">${esc(j.title || j.company || "Job")}</span><span class="job-meta">${esc(j.company || srcLabel(j.source))}<span class="sep">·</span>${e.label}</span></span></div>`;
   }).join("") + "</div>";
 }
 
 function renderUpcoming() {
   const host = $("#upcoming"); host.innerHTML = "";
   const today = new Date(); today.setHours(0, 0, 0, 0);
-  const dated = state.jobs.filter((j) => isoToDate(j.follow_up_date) && isoToDate(j.follow_up_date) >= today)
-    .sort((a, b) => a.follow_up_date.localeCompare(b.follow_up_date));
-  const nodate = state.jobs.filter((j) => !j.follow_up_date);
+  const cur = state.calCursor;
+  const addLabel = (txt, count) => {
+    const l = document.createElement("div"); l.className = "up-group-label";
+    l.innerHTML = count != null ? `${esc(txt)} <span class="up-count">${count}</span>` : esc(txt);
+    host.appendChild(l);
+  };
 
-  if (!dated.length) host.innerHTML = '<p class="muted" style="margin-bottom:18px">No upcoming follow-ups. Set one on any job.</p>';
-  let lastLabel = "";
-  for (const j of dated) {
-    const d = isoToDate(j.follow_up_date);
-    const label = relLabel(d, today);
-    if (label !== lastLabel) { const l = document.createElement("div"); l.className = "up-group-label"; l.textContent = label; host.appendChild(l); lastLabel = label; }
-    host.appendChild(upRow(j, "Follow up"));
+  const followUps = state.jobs.filter((j) => { const d = isoToDate(j.follow_up_date); return d && d >= today; })
+    .sort((a, b) => a.follow_up_date.localeCompare(b.follow_up_date));
+  if (followUps.length) {
+    addLabel("Upcoming follow-ups");
+    followUps.forEach((j) => host.appendChild(upRow(j, "Follow up")));
   }
-  if (nodate.length) {
-    const l = document.createElement("div"); l.className = "up-group-label"; l.innerHTML = `No date <span class="up-count">${nodate.length}</span>`; host.appendChild(l);
-    nodate.forEach((j) => host.appendChild(upRow(j, cap(j.status))));
+
+  const monthApps = state.jobs
+    .filter((j) => { const d = isoToDate(j.date_applied); return d && d.getFullYear() === cur.getFullYear() && d.getMonth() === cur.getMonth(); })
+    .sort((a, b) => b.date_applied.localeCompare(a.date_applied));
+  if (monthApps.length) {
+    addLabel(`Applied in ${MONTHS[cur.getMonth()]}`, monthApps.length);
+    let lastDay = "";
+    for (const j of monthApps.slice(0, 60)) {
+      const d = isoToDate(j.date_applied);
+      const dl = d.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" });
+      if (dl !== lastDay) { const dh = document.createElement("div"); dh.className = "up-day"; dh.textContent = dl; host.appendChild(dh); lastDay = dl; }
+      host.appendChild(upRow(j, "Applied"));
+    }
+    if (monthApps.length > 60) addLabel(`+${monthApps.length - 60} more this month`);
+  } else if (!followUps.length) {
+    host.innerHTML = `<p class="muted" style="margin-bottom:18px">No applications in ${MONTHS[cur.getMonth()]} ${cur.getFullYear()}. Use the ‹ › arrows to browse other months.</p>`;
   }
 }
 function relLabel(d, today) {
@@ -341,8 +372,12 @@ function mdToHtml(md) {
 function boot() {
   paintIcons();
   try { setAppearance(localStorage.getItem("jobtrail-appearance") || "calm"); } catch { setAppearance("calm"); }
+  if (location.hash.replace("#", "") === "calendar") state.view = "calendar";
 
-  document.querySelectorAll("[data-view]").forEach((b) => b.addEventListener("click", () => { state.view = b.dataset.view; render(); }));
+  document.querySelectorAll("[data-view]").forEach((b) => b.addEventListener("click", () => {
+    state.view = b.dataset.view; location.hash = state.view === "calendar" ? "calendar" : "";
+    render();
+  }));
   $("#add-form").addEventListener("submit", (ev) => { ev.preventDefault(); const u = $("#add-url").value.trim(); if (u) addJob(u); });
 
   $("#data-btn").addEventListener("click", (ev) => { ev.stopPropagation(); toggleMenu(); });

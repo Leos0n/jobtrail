@@ -202,6 +202,10 @@ body {
 .cal-event { margin-top: 7px; background: var(--accent-tint); border-radius: 7px; padding: 5px 8px; cursor: pointer; font-size: 11.5px; line-height: 1.3; }
 .cal-event .ce-title { color: var(--ink); font-weight: 600; display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cal-event .ce-tag { color: var(--accent); }
+.cal-event.applied { background: var(--surface-2); }
+.cal-event.applied .ce-tag { color: var(--muted); }
+.cal-more { display: block; font-size: 11px; color: var(--muted); margin-top: 4px; }
+.up-day { font-size: 12px; color: var(--ink); font-weight: 600; margin: 12px 0 6px; }
 .cal-week { display: grid; grid-template-columns: repeat(7, 1fr); gap: 10px; }
 .cal-week .wk-col { border: 1px solid var(--hairline); border-radius: var(--r-md); min-height: 220px; padding: 10px; }
 .cal-week .wk-head { font-size: 12px; color: var(--muted); margin-bottom: 8px; }

@@ -121,19 +121,20 @@ def _job_key(url, company, title, tab):
 
 
 _MONTHS = r"(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*"
-DATE_HEADER_RE = re.compile(rf"^\s*{_MONTHS}\.?\s+\d{{1,2}}(?:st|nd|rd|th)?,?\s*\d{{4}}\b", re.I)
+DATE_HEADER_RE = re.compile(rf"^\s*{_MONTHS}\.?\s+\d{{1,2}}(?:st|nd|rd|th)?(?:,?\s*\d{{4}})?\b", re.I)
 
 
 def _cell(c):
     return "" if c is None else str(c)
 
 
-def parse_header_date(text):
-    m = re.search(rf"({_MONTHS})\.?\s+(\d{{1,2}})(?:st|nd|rd|th)?,?\s*(\d{{4}})", text, re.I)
+def parse_header_date(text, default_year=None):
+    m = re.search(rf"({_MONTHS})\.?\s+(\d{{1,2}})(?:st|nd|rd|th)?(?:,?\s*(\d{{4}}))?", text, re.I)
     if not m:
         return None
+    year = m.group(3) or default_year or str(datetime.now().year)
     try:
-        stamp = f"{m.group(1)[:3].title()} {int(m.group(2))} {m.group(3)}"
+        stamp = f"{m.group(1)[:3].title()} {int(m.group(2))} {year}"
         return datetime.strptime(stamp, "%b %d %Y").strftime("%Y-%m-%d")
     except ValueError:
         return None
@@ -157,13 +158,16 @@ def looks_grouped(values):
 def _values_to_jobs_grouped(values, tab, default_status):
     """Parse the date-grouped layout: a date header row, then one job per row
     (Company, Role, Location?, Link?, Status?), repeating per day."""
-    jobs, cur_date = [], None
+    jobs, cur_date, cur_year = [], None, None
     for row in values:
         cells = [_cell(c).strip() for c in row]
         if not any(cells):
             continue
         if DATE_HEADER_RE.match(cells[0]):
-            cur_date = parse_header_date(cells[0])
+            ym = re.search(r"\b(\d{4})\b", cells[0])
+            if ym:
+                cur_year = ym.group(1)
+            cur_date = parse_header_date(cells[0], default_year=cur_year)
             continue
         company = cells[0]
         if not company:

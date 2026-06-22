@@ -77,5 +77,23 @@ class TestMapping(unittest.TestCase):
         self.assertEqual(sheets_map.values_to_jobs([], tab="x")["jobs"], [])
 
 
+class TestDateGroupedYearCarry(unittest.TestCase):
+    def test_yearless_headers_inherit_year(self):
+        rows = [
+            ["May 20th, 2026 (2 Jobs)"],
+            ["Home Depot", "Cashier"],
+            ["Target", "Stocker"],
+            ["June 3rd (1 Jobs)"],   # no year
+            ["Costco", "Member Rep"],
+            ["June 5 (1 Jobs)"],     # no ordinal, no year
+            ["Lowe's", "Associate"],
+        ]
+        res = sheets_map.values_to_jobs(rows, default_status="applied", tab="Applied")
+        by = {j["company"]: j["date_applied"] for j in res["jobs"]}
+        self.assertEqual(by["Home Depot"], "2026-05-20")
+        self.assertEqual(by["Costco"], "2026-06-03")   # year carried from May header
+        self.assertEqual(by["Lowe's"], "2026-06-05")
+
+
 if __name__ == "__main__":
     unittest.main()
