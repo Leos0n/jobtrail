@@ -18,7 +18,7 @@ UI. Comes with a matching CLI for batch markdown export.
 ### 1. The tracker UI (recommended)
 
 ```bash
-cd Indeed-CLI
+cd jobtrail
 ./bin/job-tracker            # serves http://127.0.0.1:8765
 # open that URL in your browser
 ```
@@ -103,7 +103,7 @@ python3 -m unittest discover -s tests -v   # 25 tests, fully offline
 ## Layout
 
 ```
-Indeed-CLI/
+jobtrail/
   bin/
     job-tracker          # launch the web UI
     indeed-cli           # CLI for markdown/JSON export
