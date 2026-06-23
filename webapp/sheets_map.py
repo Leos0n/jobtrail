@@ -128,6 +128,23 @@ def _cell(c):
     return "" if c is None else str(c)
 
 
+def _row_link(links, ri):
+    """Best apply/job URL for row ``ri`` from the parallel link grid.
+
+    Prefers a link past the company/title columns (e.g. an "Apply Here" cell),
+    but falls back to any linked cell (some trackers link the role title)."""
+    if not links or ri >= len(links):
+        return None
+    row = links[ri] or []
+    for i, uri in enumerate(row):
+        if uri and i >= 2:
+            return uri
+    for uri in row:
+        if uri:
+            return uri
+    return None
+
+
 def parse_header_date(text, default_year=None):
     m = re.search(rf"({_MONTHS})\.?\s+(\d{{1,2}})(?:st|nd|rd|th)?(?:,?\s*(\d{{4}}))?", text, re.I)
     if not m:
@@ -155,11 +172,11 @@ def looks_grouped(values):
     return sum(1 for r in values if r and DATE_HEADER_RE.match(_cell(r[0]).strip())) >= 2
 
 
-def _values_to_jobs_grouped(values, tab, default_status):
+def _values_to_jobs_grouped(values, tab, default_status, links=None):
     """Parse the date-grouped layout: a date header row, then one job per row
     (Company, Role, Location?, Link?, Status?), repeating per day."""
     jobs, cur_date, cur_year = [], None, None
-    for row in values:
+    for ri, row in enumerate(values):
         cells = [_cell(c).strip() for c in row]
         if not any(cells):
             continue
@@ -183,6 +200,10 @@ def _values_to_jobs_grouped(values, tab, default_status):
                 status = match_status(c)
             elif location is None:
                 location = c
+        # The link is usually a hyperlink behind label text ("Apply Here"),
+        # which plain values can't see — recover it from the link grid.
+        if not url:
+            url = _row_link(links, ri)
         job = {
             "source": "google-sheet",
             "company": company,
@@ -199,13 +220,17 @@ def _values_to_jobs_grouped(values, tab, default_status):
     return {"mapping": {"layout": "date-grouped"}, "jobs": jobs, "warnings": []}
 
 
-def values_to_jobs(values, default_status=None, tab=None, mapping=None):
+def values_to_jobs(values, default_status=None, tab=None, mapping=None, links=None):
     """Convert a tab's values into job dicts. Handles both a standard table
-    (row 0 = column headers) and a date-grouped layout (auto-detected)."""
+    (row 0 = column headers) and a date-grouped layout (auto-detected).
+
+    ``links`` is an optional parallel grid of cell URLs (from
+    :func:`gsheets.read_tab_with_links`) used to recover apply links that are
+    stored as hyperlinks behind label text."""
     if not values:
         return {"mapping": {}, "jobs": [], "warnings": ["empty tab"]}
     if mapping is None and looks_grouped(values):
-        return _values_to_jobs_grouped(values, tab, default_status)
+        return _values_to_jobs_grouped(values, tab, default_status, links=links)
     headers = [str(h).strip() for h in values[0]]
     mapping = mapping or detect_mapping(headers)
     warnings = []
@@ -213,7 +238,7 @@ def values_to_jobs(values, default_status=None, tab=None, mapping=None):
         warnings.append(f"tab '{tab}': no company/title column detected")
 
     jobs = []
-    for row in values[1:]:
+    for ri, row in enumerate(values[1:], start=1):
         fields = {}
         for i, header in enumerate(headers):
             field = mapping.get(header)
@@ -225,10 +250,15 @@ def values_to_jobs(values, default_status=None, tab=None, mapping=None):
         if not any(fields.get(k) for k in ("company", "title", "url")):
             continue
 
+        # Prefer a real hyperlink over label text in the URL column.
+        url = fields.get("url")
+        if not (url or "").lower().startswith("http"):
+            url = _row_link(links, ri) or url
+
         date_applied = normalize_date(fields.get("date_applied"))
         job = {
             "source": "google-sheet",
-            "url": fields.get("url"),
+            "url": url,
             "company": fields.get("company"),
             "title": fields.get("title"),
             "location": fields.get("location"),

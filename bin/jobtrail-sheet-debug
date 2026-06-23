@@ -48,40 +48,64 @@ def main() -> int:
         print(f"  NOTE: these tabs exist but are NOT synced: {missing}")
 
     db = Database(str(DB_PATH))
-    print(f"Jobs in DB  : {len(db.list_jobs())}\n")
+    all_db = db.list_jobs()
+    db_sheet_rows = [j for j in all_db if j.get("source") == "google-sheet"]
+    print(f"Jobs in DB  : {len(all_db)} ({len(db_sheet_rows)} from the sheet)\n")
 
-    grand_parsed = grand_new = 0
+    def already(job):
+        key = job.get("job_key")
+        if key:
+            return db.conn.execute("SELECT 1 FROM jobs WHERE job_key = ?", [key]).fetchone()
+        return db.find_by_key(job.get("url", ""), None)
+
+    grand_parsed = grand_new = grand_links = 0
+    parsed_by_day = {}
     for tab in cfg["tabs"]:
-        values = gsheets.read_tab(sid, tab, token)
-        res = sheets_map.values_to_jobs(values, default_status=cfg.get("default_status"), tab=tab)
+        values, links = gsheets.read_tab_with_links(sid, tab, token)
+        res = sheets_map.values_to_jobs(
+            values, default_status=cfg.get("default_status"), tab=tab, links=links)
         jobs = res["jobs"]
         layout = res.get("mapping", {}).get("layout", "table")
-        new = [j for j in jobs if not db.find_by_key(j.get("url", ""), j.get("job_key"))]
+        new = [j for j in jobs if not already(j)]
+        with_link = [j for j in jobs if (j.get("url") or "").startswith("http")]
         grand_parsed += len(jobs)
         grand_new += len(new)
+        grand_links += len(with_link)
+        for j in jobs:
+            d = j.get("date_applied") or "(no date)"
+            parsed_by_day[d] = parsed_by_day.get(d, 0) + 1
         print(f"Tab '{tab}': {len(values)} rows -> {len(jobs)} parsed jobs "
-              f"(layout={layout}), {len(new)} NEW")
+              f"(layout={layout}), {len(new)} NEW, {len(with_link)} with real links")
         for w in res.get("warnings", []):
             print(f"    warning: {w}")
         print("    most recent parsed rows:")
         for j in jobs[-5:]:
             print(f"      - {j.get('company')} | {j.get('title')} | "
-                  f"applied={j.get('date_applied')} | key={j.get('job_key')}")
-        if new:
-            print("    would import:")
-            for j in new[:15]:
-                print(f"      + {j.get('company')} | {j.get('title')} | "
-                      f"applied={j.get('date_applied')} | key={j.get('job_key')}")
+                  f"applied={j.get('date_applied')} | url={j.get('url')}")
         print()
 
+    # Compare what the sheet SAYS per day against what's actually in the DB —
+    # a mismatch means stale duplicates (over/undercount) that --reset fixes.
+    db_by_day = {}
+    for j in db_sheet_rows:
+        d = j.get("date_applied") or "(no date)"
+        db_by_day[d] = db_by_day.get(d, 0) + 1
+    mismatched = {d: (db_by_day.get(d, 0), parsed_by_day.get(d, 0))
+                  for d in set(db_by_day) | set(parsed_by_day)
+                  if db_by_day.get(d, 0) != parsed_by_day.get(d, 0)}
+    if mismatched:
+        print("DAY-COUNT MISMATCH (DB vs sheet) — stale duplicates present:")
+        for d in sorted(mismatched, reverse=True)[:12]:
+            indb, insheet = mismatched[d]
+            print(f"    {d}: DB has {indb}, sheet says {insheet}")
+        print("  Fix with a one-time clean re-import (backs up first):")
+        print("    ./bin/jobtrail-google sync --reset\n")
+
     db.close()
-    print(f"TOTAL: parsed={grand_parsed}  new={grand_new}")
-    if grand_new == 0:
-        print("\nEvery parsed row already matches a DB job. If jobs you applied to\n"
-              "recently are MISSING above (not in 'most recent parsed rows'), they\n"
-              "aren't being read from the sheet — check the tab list and row format.\n"
-              "If they DO appear above but are not counted NEW, it's a dedup-key\n"
-              "collision.")
+    print(f"TOTAL: parsed={grand_parsed}  new={grand_new}  with-real-links={grand_links}")
+    if grand_links < grand_parsed:
+        print(f"  NOTE: {grand_parsed - grand_links} row(s) have no recoverable link "
+              "(cell isn't actually hyperlinked in the sheet).")
     return 0
 
 

@@ -80,6 +80,35 @@ For capture even when the app isn't running, schedule the CLI, e.g. hourly:
 0 * * * * cd /path/to/Indeed-CLI && ./bin/jobtrail-google sync
 ```
 
+## Troubleshooting wrong counts or missing links
+
+- **Counts look doubled / off (over- or under-counting per day).** Older sync
+  versions could leave rows that newer syncs don't recognize as the same job, so
+  they pile up (sync only ever *adds*). Do a one-time clean re-import — it backs
+  up your database first, removes previously sheet-imported rows, and re-imports
+  fresh:
+
+  ```bash
+  ./bin/jobtrail-google sync --reset
+  ```
+
+  Only `google-sheet` rows are cleared; jobs you added by pasting an Indeed /
+  LinkedIn link are untouched.
+
+- **"Apply Here" links weren't imported.** Cells that show label text but link
+  out (a hyperlink, an `=HYPERLINK()` formula, or an inserted rich-text link) are
+  now read as the job's URL. Re-run `sync --reset` to backfill links on rows that
+  imported before this was supported.
+
+- **See exactly what the sync reads** (read-only; writes nothing):
+
+  ```bash
+  ./bin/jobtrail-sheet-debug
+  ```
+
+  It prints per-tab parsed jobs, recovered links, and flags any day where the
+  database count disagrees with the sheet (the signal that `--reset` is needed).
+
 ## What's stored where
 
 | File | Contents | Committed? |

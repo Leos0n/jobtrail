@@ -51,3 +51,58 @@ def read_tab(sid: str, tab: str, token: str) -> list[list]:
     rng = urllib.parse.quote(f"'{tab}'", safe="")
     url = f"{API}/{sid}/values/{rng}?majorDimension=ROWS&valueRenderOption=FORMATTED_VALUE"
     return _get(url, token).get("values", [])
+
+
+_HYPERLINK_RE = re.compile(r'=HYPERLINK\(\s*"([^"]+)"', re.I)
+
+
+def _cell_link(cell: dict):
+    """Extract a URL a cell points to, however the link was added in Sheets.
+
+    The plain ``values`` endpoint only returns a cell's display text (e.g.
+    "Apply Here"), dropping the underlying link. Reading grid data lets us
+    recover it from any of the three ways a Sheet stores a link: a cell-level
+    hyperlink, a ``=HYPERLINK()`` formula, or a rich-text run link.
+    """
+    if cell.get("hyperlink"):
+        return cell["hyperlink"]
+    formula = (cell.get("userEnteredValue") or {}).get("formulaValue")
+    if formula:
+        m = _HYPERLINK_RE.search(formula)
+        if m:
+            return m.group(1)
+    for run in cell.get("textFormatRuns") or []:
+        uri = (((run.get("format") or {}).get("link")) or {}).get("uri")
+        if uri:
+            return uri
+    return None
+
+
+def read_tab_with_links(sid: str, tab: str, token: str):
+    """Like :func:`read_tab`, but also return a parallel grid of cell links.
+
+    Returns ``(values, links)`` where ``links[r][c]`` is the URL of that cell
+    (or ``None``). Falls back to plain values (all links ``None``) if the grid
+    read isn't available, so syncing never breaks on it.
+    """
+    rng = urllib.parse.quote(f"'{tab}'", safe="")
+    fields = urllib.parse.quote(
+        "sheets(data(rowData(values("
+        "formattedValue,hyperlink,userEnteredValue/formulaValue,"
+        "textFormatRuns(format/link/uri)))))"
+    )
+    url = f"{API}/{sid}?ranges={rng}&includeGridData=true&fields={fields}"
+    try:
+        data = _get(url, token)
+        sheets = data.get("sheets") or []
+        grid = (sheets[0].get("data") or [{}])[0].get("rowData") or []
+    except Exception:
+        vals = read_tab(sid, tab, token)
+        return vals, [[None] * len(r) for r in vals]
+
+    values, links = [], []
+    for row in grid:
+        cells = row.get("values") or []
+        values.append([c.get("formattedValue", "") for c in cells])
+        links.append([_cell_link(c) for c in cells])
+    return values, links
