@@ -37,6 +37,12 @@ In the UI you can:
 
 All edits autosave to the local SQLite database.
 
+**Prefer an app icon?** Run `python3 install-desktop.py` once to add a clickable
+JobTrail icon to your desktop / app menu (Linux, macOS, Windows). Launching it
+starts the server and opens the UI for you — see
+[docs/DESKTOP_APP.md](docs/DESKTOP_APP.md). Your data and API keys stay in the
+git-ignored `data/` directory, so nothing private is ever published.
+
 ### 2. The CLI (batch markdown export)
 
 ```bash

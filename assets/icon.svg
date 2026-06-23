@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- JobTrail app icon. Terracotta-on-cream clipboard with a checkmark,
+     matching the web UI's brand palette (accent #a14a38, canvas #faf6ec). -->
+<svg width="512" height="512" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#bc5a45"/>
+      <stop offset="1" stop-color="#a14a38"/>
+    </linearGradient>
+  </defs>
+
+  <!-- rounded-square app tile -->
+  <rect x="0" y="0" width="512" height="512" rx="114" ry="114" fill="url(#bg)"/>
+
+  <!-- clipboard body -->
+  <rect x="132" y="120" width="248" height="296" rx="28" ry="28" fill="#faf6ec"/>
+
+  <!-- clip at the top -->
+  <rect x="214" y="96" width="84" height="56" rx="18" ry="18" fill="#26211c"/>
+  <rect x="226" y="84" width="60" height="40" rx="16" ry="16" fill="#faf6ec" stroke="#26211c" stroke-width="12"/>
+
+  <!-- checklist rows -->
+  <g fill="#e0d8c7">
+    <rect x="176" y="206" width="160" height="18" rx="9"/>
+    <rect x="176" y="258" width="160" height="18" rx="9"/>
+    <rect x="176" y="310" width="120" height="18" rx="9"/>
+  </g>
+
+  <!-- green checkmark over the first row -->
+  <path d="M168 214 l16 16 l30 -34" fill="none" stroke="#5b8a5a"
+        stroke-width="20" stroke-linecap="round" stroke-linejoin="round"
+        transform="translate(-8 -2)"/>
+
+  <!-- checkmark badge bottom-right -->
+  <circle cx="340" cy="356" r="46" fill="#5b8a5a"/>
+  <path d="M320 356 l14 14 l26 -30" fill="none" stroke="#faf6ec"
+        stroke-width="14" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

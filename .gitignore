@@ -16,3 +16,9 @@ venv/
 
 # Private, machine-local extensions (never published)
 private/
+
+# Generated desktop-app icons — rebuilt locally by install-desktop.py from
+# assets/icon.svg + assets/icongen.py, so no binaries live in the repo.
+assets/icon.png
+assets/icon.ico
+assets/icon-*.png
