@@ -18,6 +18,7 @@ Then:
   ./bin/jobtrail-google status
 """
 import argparse
+import csv
 import json
 import os
 import sys
@@ -70,25 +71,48 @@ def cmd_tabs(args):
         print("  -", t)
 
 
-def cmd_sync(args):
-    token = need_token()
-    cfg = load_config()
-    sheet = args.sheet or cfg.get("spreadsheet_url")
-    if not sheet:
-        sys.exit("No sheet configured. Pass --sheet <url> the first time.")
-    sid = gsheets.spreadsheet_id(sheet)
-    tabs = [t.strip() for t in args.tabs.split(",")] if args.tabs else cfg.get("tabs")
-    if not tabs:
-        sys.exit("No tabs selected. Pass --tabs \"Tab A,Tab B\" the first time "
-                 "(use the 'tabs' command to list them).")
+def _read_export(path):
+    """Read a downloaded sheet tab (CSV or TSV) into a grid of cell values."""
+    p = Path(path)
+    if not p.is_file():
+        sys.exit(f"Export file not found: {path}")
+    delim = "\t" if p.suffix.lower() in (".tsv", ".tab") else ","
+    with p.open(newline="", encoding="utf-8-sig") as f:
+        return p.stem, [list(row) for row in csv.reader(f, delimiter=delim)]
 
+
+def cmd_sync(args):
+    cfg = load_config()
     all_jobs, warnings = [], []
-    for tab in tabs:
-        values, links = gsheets.read_tab_with_links(sid, tab, token)
-        res = sheets_map.values_to_jobs(values, default_status=args.status, tab=tab, links=links)
-        print(f"  {tab!r}: {len(res['jobs'])} job row(s)")
-        all_jobs.extend(res["jobs"])
-        warnings.extend(res["warnings"])
+    sheet = sid = None
+
+    if args.from_file:
+        # Offline resync from a downloaded export (File > Download > CSV/TSV in
+        # Sheets), one file per tab. No Google OAuth needed; same parser + import
+        # path as a live sync, so counts come out identical.
+        for path in [p.strip() for p in args.from_file.split(",") if p.strip()]:
+            tab, values = _read_export(path)
+            res = sheets_map.values_to_jobs(values, default_status=args.status, tab=tab)
+            print(f"  {tab!r} ({path}): {len(res['jobs'])} job row(s)")
+            all_jobs.extend(res["jobs"])
+            warnings.extend(res["warnings"])
+    else:
+        token = need_token()
+        sheet = args.sheet or cfg.get("spreadsheet_url")
+        if not sheet:
+            sys.exit("No sheet configured. Pass --sheet <url> the first time, "
+                     "or use --from-file <export.csv> for an offline resync.")
+        sid = gsheets.spreadsheet_id(sheet)
+        tabs = [t.strip() for t in args.tabs.split(",")] if args.tabs else cfg.get("tabs")
+        if not tabs:
+            sys.exit("No tabs selected. Pass --tabs \"Tab A,Tab B\" the first time "
+                     "(use the 'tabs' command to list them).")
+        for tab in tabs:
+            values, links = gsheets.read_tab_with_links(sid, tab, token)
+            res = sheets_map.values_to_jobs(values, default_status=args.status, tab=tab, links=links)
+            print(f"  {tab!r}: {len(res['jobs'])} job row(s)")
+            all_jobs.extend(res["jobs"])
+            warnings.extend(res["warnings"])
     for w in warnings:
         print("  !", w, file=sys.stderr)
 
@@ -111,14 +135,13 @@ def cmd_sync(args):
     result = db.import_jobs(all_jobs)
     db.close()
     cfg.update({
-        "spreadsheet_id": sid,
-        "spreadsheet_url": sheet,
-        "tabs": tabs,
         "default_status": args.status,
         "last_sync": time.strftime("%Y-%m-%dT%H:%M:%S"),
         "last_added": result["added"],
         "last_total": len(all_jobs),
     })
+    if sheet:  # live sync — remember the source; an offline --from-file keeps it
+        cfg.update({"spreadsheet_id": sid, "spreadsheet_url": sheet, "tabs": tabs})
     save_config(cfg)
     if args.wipe:
         print(f"\nWiped + resynced. Cleared {removed} job(s), imported {result['added']} fresh "
@@ -151,6 +174,10 @@ def main():
     s = sub.add_parser("sync")
     s.add_argument("--sheet"); s.add_argument("--tabs"); s.add_argument("--status", default=None,
                    help="Default status for rows whose status cell is blank (e.g. applied).")
+    s.add_argument("--from-file", metavar="EXPORT.csv[,EXPORT2.csv]",
+                   help="Offline resync from downloaded sheet export(s) (CSV/TSV, "
+                        "one per tab) instead of the live Google API. Combine with "
+                        "--wipe for a full clean reimport without OAuth.")
     s.add_argument("--dry-run", action="store_true")
     s.add_argument("--reset", action="store_true",
                    help="Clear previously sheet-imported rows and re-import fresh "
