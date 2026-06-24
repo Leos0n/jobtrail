@@ -266,6 +266,30 @@ class TestResetReimport(unittest.TestCase):
         self.assertTrue(any(r["source"] == "indeed" for r in rows))  # manual job kept
 
 
+class TestWipeReimport(unittest.TestCase):
+    """clear_jobs is the nuclear reset for stale rows that escape source scope."""
+
+    def test_wipe_clears_everything_then_reimports(self):
+        from webapp.db import Database
+        dbf = tempfile.mktemp(suffix=".db")
+        db = Database(dbf)
+        # Stale rows WITHOUT a 'google-sheet' source (older sync) — delete_by_source
+        # would miss these, but a wipe must not.
+        db.import_jobs([{"source": None, "company": "Old", "title": "x",
+                         "date_applied": "2026-06-22", "url": "gsheet://legacy", "job_key": "legacy"},
+                        {"source": "indeed", "company": "Manual", "title": "z",
+                         "url": "https://indeed.com/viewjob?jk=abc", "job_key": "abc"}])
+        self.assertEqual(db.delete_by_source("google-sheet"), 0)  # source scope misses them
+        cleared = db.clear_jobs()
+        db.import_jobs([{"source": "google-sheet", "company": "A", "title": "x",
+                         "date_applied": "2026-06-22", "url": "https://a.io/apply", "job_key": "new1"}])
+        rows = db.export_all()
+        db.close(); os.remove(dbf)
+        self.assertEqual(cleared, 2)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["job_key"], "new1")
+
+
 class TestAutoSyncStartup(unittest.TestCase):
     """AutoSync should sync shortly after startup, not after a full interval."""
 

@@ -267,5 +267,14 @@ class Database:
         self.dirty = True
         return cur.rowcount
 
+    def clear_jobs(self) -> int:
+        """Hard-delete EVERY job — a full reset. Use when source-scoped cleanup
+        isn't enough (e.g. stale rows from very old syncs that predate source
+        tagging). Caller should snapshot a backup first."""
+        cur = self.conn.execute("DELETE FROM jobs")
+        self.conn.commit()
+        self.dirty = True
+        return cur.rowcount
+
     def close(self):
         self.conn.close()
