@@ -1,8 +1,14 @@
 """Map Google Sheets rows (list-of-lists) into JobTrail job records.
 
-Source-agnostic: the first row is treated as headers, which are fuzzily matched
-to JobTrail fields. Free-text statuses and dates are normalized. A per-tab
-``default_status`` lets a "tab = pipeline stage" layout assign status by tab.
+Auto-detects three layouts:
+  * date-grouped — a date header row ("June 22nd, 2026"), then one job per row;
+  * table — row 0 is headers, fuzzily matched to JobTrail fields;
+  * positional — a headerless table read by column position
+    (A=company, B=job/title, C=location, D=url, E=date/time submitted).
+
+Free-text statuses and dates (including "time submitted" timestamps) are
+normalized. A per-tab ``default_status`` lets a "tab = pipeline stage" layout
+assign status by tab.
 
 Stdlib only. Shared by the Google Sheets connector (and reusable for CSV).
 """
@@ -30,6 +36,11 @@ HEADER_ALIASES = {
     "rating": ["rating", "interest", "priority", "fit", "excitement"],
 }
 
+# Column order for a headerless sheet (no recognizable header row): map cells
+# by position. Matches the common layout A=company, B=job, C=location, D=url,
+# E=time submitted.
+DEFAULT_POSITIONAL = ["company", "title", "location", "url", "date_applied"]
+
 STATUS_SYNONYMS = {
     "saved": ["saved", "wishlist", "to apply", "bookmarked", "interested", "backlog", "todo", "to do", "lead", "prospect"],
     "applied": ["applied", "submitted", "sent", "application sent", "app sent", "in review", "under review", "pending", "waiting"],
@@ -42,6 +53,12 @@ STATUS_SYNONYMS = {
 _RATING_WORDS = {"low": 2, "medium": 3, "med": 3, "high": 5, "top": 5, "maybe": 2, "dream": 5}
 _DATE_FORMATS = ["%Y-%m-%d", "%m/%d/%Y", "%m/%d/%y", "%d/%m/%Y", "%Y/%m/%d", "%m-%d-%Y",
                  "%b %d %Y", "%b %d, %Y", "%B %d %Y", "%B %d, %Y", "%d %b %Y", "%d %B %Y"]
+# Date-then-time stamps (e.g. a "time submitted" column): parse, keep the date.
+_DATETIME_FORMATS = [
+    "%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%dT%H:%M",
+    "%m/%d/%Y %H:%M:%S", "%m/%d/%Y %H:%M", "%m/%d/%Y %I:%M:%S %p", "%m/%d/%Y %I:%M %p",
+    "%m/%d/%y %H:%M", "%m/%d/%y %I:%M %p",
+]
 
 
 def _norm(s):
@@ -95,6 +112,20 @@ def normalize_date(value):
             return datetime.strptime(v, fmt).strftime("%Y-%m-%d")
         except ValueError:
             continue
+    # Timestamps ("time submitted"): match a full datetime, keep the date part.
+    for fmt in _DATETIME_FORMATS:
+        try:
+            return datetime.strptime(v, fmt).strftime("%Y-%m-%d")
+        except ValueError:
+            continue
+    # Fallback: parse just the leading date token off an unrecognized stamp.
+    head = re.split(r"[ T]", v, 1)[0]
+    if head != v:
+        for fmt in _DATE_FORMATS:
+            try:
+                return datetime.strptime(head, fmt).strftime("%Y-%m-%d")
+            except ValueError:
+                continue
     m = re.search(r"\d{4}-\d{2}-\d{2}", v)
     return m.group(0) if m else v
 
@@ -220,9 +251,75 @@ def _values_to_jobs_grouped(values, tab, default_status, links=None):
     return {"mapping": {"layout": "date-grouped"}, "jobs": jobs, "warnings": []}
 
 
+def _looks_dateish(s):
+    d = normalize_date(s)
+    return bool(re.fullmatch(r"\d{4}-\d{2}-\d{2}", d or ""))
+
+
+def looks_headerless(values):
+    """True when there's no header row but the data has the job shape, so
+    columns should be read by position (A=company … D=url, E=date submitted).
+
+    Guards against non-job tabs (e.g. a 2-column ``Month|Count`` chart): the
+    rows must be several columns wide and carry a url or date signal in the
+    expected positions."""
+    if not values:
+        return False
+    first = [str(h).strip() for h in values[0]]
+    if len(set(detect_mapping(first).values())) >= 2:
+        return False  # a real header row is present
+    sample = [[_cell(c).strip() for c in r] for r in values[:8]]
+    sample = [r for r in sample if any(r)]
+    if not sample:
+        return False
+    wide = sum(1 for r in sample if sum(bool(c) for c in r) >= 4)
+    signal = any(
+        (len(r) > 3 and r[3].lower().startswith("http"))
+        or (len(r) > 4 and _looks_dateish(r[4]))
+        for r in sample
+    )
+    return signal and wide >= max(1, len(sample) // 2)
+
+
+def _values_to_jobs_positional(values, tab, default_status, links=None, columns=DEFAULT_POSITIONAL):
+    """Read a headerless sheet by column position (see DEFAULT_POSITIONAL)."""
+    jobs = []
+    start = 0
+    if values and len(set(detect_mapping([_cell(c).strip() for c in values[0]]).values())) >= 2:
+        start = 1  # a header row is present after all — skip it
+    for ri in range(start, len(values)):
+        cells = [_cell(c).strip() for c in values[ri]]
+        if not any(cells):
+            continue
+        fields = {col: cells[i] for i, col in enumerate(columns) if i < len(cells) and cells[i]}
+        company, title = fields.get("company"), fields.get("title")
+        url = fields.get("url")
+        if not (url or "").lower().startswith("http"):
+            url = _row_link(links, ri) or url
+        if not (company or title or url):
+            continue
+        date_applied = normalize_date(fields.get("date_applied"))
+        job = {
+            "source": "google-sheet",
+            "company": company,
+            "title": title,
+            "location": fields.get("location"),
+            "url": url,
+            "status": default_status or ("applied" if date_applied else "saved"),
+            "date_applied": date_applied,
+        }
+        job["job_key"] = _job_key(job["url"], company, title, tab)
+        if not job["url"]:
+            job["url"] = f"gsheet://{job['job_key']}"
+        jobs.append({k: v for k, v in job.items() if v is not None})
+    return {"mapping": {"layout": "positional", "columns": list(columns)}, "jobs": jobs, "warnings": []}
+
+
 def values_to_jobs(values, default_status=None, tab=None, mapping=None, links=None):
-    """Convert a tab's values into job dicts. Handles both a standard table
-    (row 0 = column headers) and a date-grouped layout (auto-detected).
+    """Convert a tab's values into job dicts. Auto-detects three layouts:
+    a date-grouped layout, a standard table (row 0 = column headers), and a
+    headerless table read by column position (A=company, B=job/title,
+    C=location, D=url, E=date/time submitted).
 
     ``links`` is an optional parallel grid of cell URLs (from
     :func:`gsheets.read_tab_with_links`) used to recover apply links that are
@@ -231,6 +328,8 @@ def values_to_jobs(values, default_status=None, tab=None, mapping=None, links=No
         return {"mapping": {}, "jobs": [], "warnings": ["empty tab"]}
     if mapping is None and looks_grouped(values):
         return _values_to_jobs_grouped(values, tab, default_status, links=links)
+    if mapping is None and looks_headerless(values):
+        return _values_to_jobs_positional(values, tab, default_status, links=links)
     headers = [str(h).strip() for h in values[0]]
     mapping = mapping or detect_mapping(headers)
     warnings = []

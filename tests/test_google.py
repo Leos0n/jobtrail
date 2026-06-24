@@ -290,6 +290,69 @@ class TestWipeReimport(unittest.TestCase):
         self.assertEqual(rows[0]["job_key"], "new1")
 
 
+class TestPositionalSchema(unittest.TestCase):
+    """Headerless A=company B=job C=location D=url E=time-submitted layout."""
+
+    SCHEMA = [
+        ["MGM Energy", "Human Resource Generalist", "Apple Valley, CA",
+         "https://jobs.example.com/1", "2026-06-20 14:32:00"],
+        ["Decorware Inc", "Digital Marketing Manager", "Rancho Cucamonga, CA",
+         "https://jobs.example.com/2", "6/21/2026 9:05 AM"],
+        ["Kingston Brass, Inc", "Digital Marketing Coordinator", "Chino, CA",
+         "https://jobs.example.com/3", "06/22/2026"],
+    ]
+
+    def test_columns_map_by_position(self):
+        res = sheets_map.values_to_jobs(self.SCHEMA, tab="Applications")
+        self.assertEqual(res["mapping"]["layout"], "positional")
+        jobs = res["jobs"]
+        self.assertEqual(len(jobs), 3)
+        j = jobs[0]
+        self.assertEqual(j["company"], "MGM Energy")
+        self.assertEqual(j["title"], "Human Resource Generalist")
+        self.assertEqual(j["location"], "Apple Valley, CA")
+        self.assertEqual(j["url"], "https://jobs.example.com/1")
+        self.assertEqual(j["date_applied"], "2026-06-20")   # time stripped
+        self.assertEqual(j["status"], "applied")            # has a submit date
+
+    def test_timestamp_formats_reduce_to_date(self):
+        res = sheets_map.values_to_jobs(self.SCHEMA, tab="A")
+        days = sorted(j["date_applied"] for j in res["jobs"])
+        self.assertEqual(days, ["2026-06-20", "2026-06-21", "2026-06-22"])
+
+    def test_header_row_is_skipped_if_present(self):
+        rows = [["Company", "Job", "Location", "URL", "Time Submitted"]] + self.SCHEMA
+        res = sheets_map.values_to_jobs(rows, tab="A")
+        # With recognizable headers this is the table layout, not positional;
+        # either way the header must not become a job.
+        self.assertEqual(len(res["jobs"]), 3)
+        self.assertNotIn("Company", [j.get("company") for j in res["jobs"]])
+
+    def test_per_day_counts_exact(self):
+        rows = self.SCHEMA + [
+            ["Pali Mountain", "Coordinator", "Running Springs, CA",
+             "https://jobs.example.com/4", "2026-06-22 10:00:00"]]
+        res = sheets_map.values_to_jobs(rows, tab="A")
+        from collections import Counter
+        by = Counter(j["date_applied"] for j in res["jobs"])
+        self.assertEqual(by["2026-06-22"], 2)
+        self.assertEqual(by["2026-06-20"], 1)
+
+
+class TestTimestampNormalize(unittest.TestCase):
+    def test_various(self):
+        cases = {
+            "2026-06-22": "2026-06-22",
+            "2026-06-22 14:30:00": "2026-06-22",
+            "2026-06-22T14:30": "2026-06-22",
+            "6/22/2026": "2026-06-22",
+            "6/22/2026 9:05 AM": "2026-06-22",
+            "06/22/2026 14:30:00": "2026-06-22",
+        }
+        for raw, want in cases.items():
+            self.assertEqual(sheets_map.normalize_date(raw), want, raw)
+
+
 class TestAutoSyncStartup(unittest.TestCase):
     """AutoSync should sync shortly after startup, not after a full interval."""
 

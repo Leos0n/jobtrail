@@ -61,6 +61,11 @@ From the JobTrail directory:
   Salary, Location, Notes, …) and free-text statuses are normalized into
   JobTrail's pipeline. `--status applied` sets the status for rows whose status
   cell is blank.
+- **Layouts handled automatically:** a header-row table, a date-grouped layout
+  (a "June 22nd, 2026" header then one job per row), or a **headerless** table
+  read by column position — `A` company, `B` job/title, `C` location, `D` url,
+  `E` date / time submitted. "Time submitted" timestamps (e.g. `6/22/2026 9:05
+  AM`) are accepted and reduced to the application date.
 - **Idempotent:** re-running only adds new rows; it never duplicates or
   overwrites edits you've made inside JobTrail.
 
