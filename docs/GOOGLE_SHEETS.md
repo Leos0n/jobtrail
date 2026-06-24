@@ -95,6 +95,16 @@ For capture even when the app isn't running, schedule the CLI, e.g. hourly:
   Only `google-sheet` rows are cleared; jobs you added by pasting an Indeed /
   LinkedIn link are untouched.
 
+  If counts are *still* wrong after `--reset` (some stale rows predate source
+  tagging and escape the source-scoped delete), do a full reset — clears **all**
+  jobs, then re-imports from the sheet:
+
+  ```bash
+  ./bin/jobtrail-google sync --wipe
+  ```
+
+  Both back up your database to `data/backups` first, so a wipe is recoverable.
+
 - **"Apply Here" links weren't imported.** Cells that show label text but link
   out (a hyperlink, an `=HYPERLINK()` formula, or an inserted rich-text link) are
   now read as the job's URL. Re-run `sync --reset` to backfill links on rows that
