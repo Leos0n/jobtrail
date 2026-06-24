@@ -11,6 +11,8 @@ Then:
   ./bin/jobtrail-google tabs --sheet "https://docs.google.com/spreadsheets/d/<ID>/edit"
   ./bin/jobtrail-google sync --sheet "<url>" --tabs "Applications,Older applications" [--dry-run]
   ./bin/jobtrail-google sync            # re-sync using saved config (capture new rows)
+  ./bin/jobtrail-google sync --reset    # clear old sheet rows + re-import fresh
+                                        #   (fixes duplicate/incorrect counts; backs up first)
   ./bin/jobtrail-google status
 """
 import argparse
@@ -23,7 +25,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from webapp import gauth, gsheets, sheets_map  # noqa: E402
+from webapp import backup, gauth, gsheets, sheets_map  # noqa: E402
 from webapp.db import Database  # noqa: E402
 
 GDIR = ROOT / "data" / "google"
@@ -31,6 +33,7 @@ CREDS = GDIR / "credentials.json"
 TOKEN = GDIR / "token.json"
 CONFIG = GDIR / "config.json"
 DB = ROOT / "data" / "jobs.db"
+BACKUPS_DIR = ROOT / "data" / "backups"
 
 
 def load_config():
@@ -79,8 +82,8 @@ def cmd_sync(args):
 
     all_jobs, warnings = [], []
     for tab in tabs:
-        values = gsheets.read_tab(sid, tab, token)
-        res = sheets_map.values_to_jobs(values, default_status=args.status, tab=tab)
+        values, links = gsheets.read_tab_with_links(sid, tab, token)
+        res = sheets_map.values_to_jobs(values, default_status=args.status, tab=tab, links=links)
         print(f"  {tab!r}: {len(res['jobs'])} job row(s)")
         all_jobs.extend(res["jobs"])
         warnings.extend(res["warnings"])
@@ -95,6 +98,13 @@ def cmd_sync(args):
         return
 
     db = Database(str(DB))
+    removed = 0
+    if args.reset:
+        # Back up first, then drop prior sheet-sourced rows so a fresh import
+        # produces exact counts (clears duplicates from older sync versions).
+        if DB.is_file():
+            backup.snapshot(str(DB), str(BACKUPS_DIR), reason="pre-reset")
+        removed = db.delete_by_source("google-sheet")
     result = db.import_jobs(all_jobs)
     db.close()
     cfg.update({
@@ -107,7 +117,11 @@ def cmd_sync(args):
         "last_total": len(all_jobs),
     })
     save_config(cfg)
-    print(f"\nSynced. Added {result['added']} new job(s); skipped {result['skipped']} already present.")
+    if args.reset:
+        print(f"\nReset sync. Removed {removed} old sheet row(s), imported {result['added']} fresh "
+              f"(backup saved to data/backups).")
+    else:
+        print(f"\nSynced. Added {result['added']} new job(s); skipped {result['skipped']} already present.")
 
 
 def cmd_status(args):
@@ -131,7 +145,11 @@ def main():
     s = sub.add_parser("sync")
     s.add_argument("--sheet"); s.add_argument("--tabs"); s.add_argument("--status", default=None,
                    help="Default status for rows whose status cell is blank (e.g. applied).")
-    s.add_argument("--dry-run", action="store_true"); s.set_defaults(func=cmd_sync)
+    s.add_argument("--dry-run", action="store_true")
+    s.add_argument("--reset", action="store_true",
+                   help="Clear previously sheet-imported rows and re-import fresh "
+                        "(fixes duplicate/incorrect counts). Backs up first.")
+    s.set_defaults(func=cmd_sync)
     sub.add_parser("status").set_defaults(func=cmd_status)
     args = ap.parse_args()
     args.func(args)

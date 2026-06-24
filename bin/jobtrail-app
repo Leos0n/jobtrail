@@ -1,0 +1,62 @@
+#!/usr/bin/env python3
+"""Desktop-app entrypoint for JobTrail.
+
+Behaves like a normal app when launched from a desktop icon: it starts the
+local server (if it isn't already running) and opens JobTrail in your default
+browser. If JobTrail is already running, it just focuses a new browser tab
+instead of starting a second copy.
+
+All data is read from / written to the repo-local ``data/`` directory (jobs,
+uploaded files, and any Google credentials) exactly like ``bin/job-tracker`` —
+that directory is git-ignored, so nothing private is ever published.
+
+Usage:
+    ./bin/jobtrail-app                 # start + open browser
+    ./bin/jobtrail-app --port 9000
+    ./bin/jobtrail-app --no-browser    # start only
+"""
+import argparse
+import os
+import socket
+import sys
+import threading
+import webbrowser
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from webapp.server import serve  # noqa: E402
+
+
+def _is_up(host, port):
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.settimeout(0.4)
+        return s.connect_ex((host, port)) == 0
+
+
+def main():
+    ap = argparse.ArgumentParser(description="Launch JobTrail as a desktop app.")
+    ap.add_argument("--host", default="127.0.0.1", help="Bind host (default loopback).")
+    ap.add_argument("--port", type=int, default=8765, help="Port (default 8765).")
+    ap.add_argument("--db", default=None, help="Path to the SQLite database file.")
+    ap.add_argument("--backup-dir", default=None, help="Where to store backups.")
+    ap.add_argument("--no-browser", action="store_true", help="Don't open the browser.")
+    args = ap.parse_args()
+
+    url = f"http://{args.host}:{args.port}"
+
+    # Already running? Just open another tab and exit — never double-start.
+    if _is_up(args.host, args.port):
+        if not args.no_browser:
+            webbrowser.open(url)
+        print(f"JobTrail is already running at {url}")
+        return
+
+    # Open the browser shortly after the server comes up.
+    if not args.no_browser:
+        threading.Timer(1.0, webbrowser.open, args=(url,)).start()
+
+    serve(host=args.host, port=args.port, db_path=args.db, backups_dir=args.backup_dir)
+
+
+if __name__ == "__main__":
+    main()

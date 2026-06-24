@@ -152,11 +152,13 @@ class TestSyncErrorSurfacing(unittest.TestCase):
             {"spreadsheet_url": "1AbCdEFghIJklMnOpQrStUvWxYz0123456789", "tabs": ["T"]}))
         self.db_path = str(self.dir / "jobs.db")
         self._oa, self._rt = gauth.access_token, gsheets.read_tab
+        self._rtl = gsheets.read_tab_with_links
 
     def tearDown(self):
         for k, v in self._orig.items():
             setattr(gsync, k, v)
         gauth.access_token, gsheets.read_tab = self._oa, self._rt
+        gsheets.read_tab_with_links = self._rtl
 
     def test_auth_failure_is_recorded_not_swallowed(self):
         def boom(_):
@@ -171,7 +173,8 @@ class TestSyncErrorSurfacing(unittest.TestCase):
 
     def test_success_clears_last_error(self):
         gauth.access_token = lambda _: "tok"
-        gsheets.read_tab = lambda sid, tab, token: [["Company", "Role"], ["Acme", "Engineer"]]
+        gsheets.read_tab_with_links = lambda sid, tab, token: (
+            [["Company", "Role"], ["Acme", "Engineer"]], [[None, None], [None, None]])
         # seed a stale error first
         gsync._save_config({**json.loads(gsync.CONFIG.read_text()), "last_error": "old failure"})
         res = gsync.sync_now(self.db_path)
@@ -179,6 +182,88 @@ class TestSyncErrorSurfacing(unittest.TestCase):
         self.assertEqual(res["added"], 1)
         self.assertIsNone(gsync.status()["last_error"])
         self.assertIsNotNone(gsync.status()["last_sync"])
+
+
+class TestCellLinks(unittest.TestCase):
+    """Recover apply URLs hidden behind label text ('Apply Here')."""
+
+    def test_cell_level_hyperlink(self):
+        cell = {"formattedValue": "Apply Here", "hyperlink": "https://jobs.example.com/123"}
+        self.assertEqual(gsheets._cell_link(cell), "https://jobs.example.com/123")
+
+    def test_hyperlink_formula(self):
+        cell = {"formattedValue": "Apply Here",
+                "userEnteredValue": {"formulaValue": '=HYPERLINK("https://x.io/a","Apply Here")'}}
+        self.assertEqual(gsheets._cell_link(cell), "https://x.io/a")
+
+    def test_rich_text_run_link(self):
+        cell = {"formattedValue": "Apply Here",
+                "textFormatRuns": [{"format": {"link": {"uri": "https://x.io/rt"}}}]}
+        self.assertEqual(gsheets._cell_link(cell), "https://x.io/rt")
+
+    def test_no_link(self):
+        self.assertIsNone(gsheets._cell_link({"formattedValue": "Apple Valley, CA"}))
+
+
+class TestGroupedLinksThreaded(unittest.TestCase):
+    """The date-grouped layout should pick up the hyperlink as the job url."""
+
+    def test_apply_here_link_becomes_url(self):
+        # >=2 date headers so the grouped layout is detected (looks_grouped).
+        values = [
+            ["June 21st, 2026 (1 Jobs)", "", "", ""],
+            ["Decorware Inc", "Digital Marketing Manager", "Hybrid", "Apply Here"],
+            ["June 22nd, 2026 (1 Jobs)", "", "", ""],
+            ["Kingston Brass, Inc", "Digital Marketing Coordinator", "Chino, CA", "Apply Here"],
+        ]
+        links = [
+            [None, None, None, None],
+            [None, None, None, "https://decorware.example.com/apply"],
+            [None, None, None, None],
+            [None, None, None, "https://kingston.example.com/apply"],
+        ]
+        res = sheets_map.values_to_jobs(values, tab="Applications", links=links)
+        jobs = {j["company"]: j for j in res["jobs"]}
+        self.assertEqual(jobs["Kingston Brass, Inc"]["url"], "https://kingston.example.com/apply")
+        self.assertEqual(jobs["Kingston Brass, Inc"]["date_applied"], "2026-06-22")
+        self.assertEqual(jobs["Decorware Inc"]["date_applied"], "2026-06-21")
+
+    def test_no_link_falls_back_to_placeholder(self):
+        values = [["June 21st, 2026 (1 Jobs)", "", "", ""],
+                  ["Decorware Inc", "Marketing Manager", "Hybrid", "Apply Here"],
+                  ["June 22nd, 2026 (1 Jobs)", "", "", ""],
+                  ["Acme", "Engineer", "Remote", "Apply Here"]]
+        res = sheets_map.values_to_jobs(values, tab="T", links=None)
+        self.assertTrue(all(j["url"].startswith("gsheet://") for j in res["jobs"]))
+
+
+class TestResetReimport(unittest.TestCase):
+    """delete_by_source enables a clean re-import with exact counts."""
+
+    def test_reset_clears_stale_duplicates(self):
+        from webapp.db import Database
+        dbf = tempfile.mktemp(suffix=".db")
+        db = Database(dbf)
+        # Stale rows from an "older sync" with different job_keys, same days.
+        stale = [{"source": "google-sheet", "company": "A", "title": "x",
+                  "date_applied": "2026-06-22", "url": "gsheet://old1", "job_key": "old1"},
+                 {"source": "google-sheet", "company": "B", "title": "y",
+                  "date_applied": "2026-06-22", "url": "gsheet://old2", "job_key": "old2"}]
+        db.import_jobs(stale)
+        # A manually added (non-sheet) job must survive the reset.
+        db.import_jobs([{"source": "indeed", "company": "Manual", "title": "z",
+                         "url": "https://indeed.com/viewjob?jk=abc", "job_key": "abc"}])
+        fresh = [{"source": "google-sheet", "company": "A", "title": "x",
+                  "date_applied": "2026-06-22", "url": "https://a.io/apply", "job_key": "new1"}]
+        removed = db.delete_by_source("google-sheet")
+        db.import_jobs(fresh)
+        rows = db.export_all()
+        db.close(); os.remove(dbf)
+        self.assertEqual(removed, 2)
+        sheet_rows = [r for r in rows if r["source"] == "google-sheet"]
+        self.assertEqual(len(sheet_rows), 1)
+        self.assertEqual(sheet_rows[0]["url"], "https://a.io/apply")
+        self.assertTrue(any(r["source"] == "indeed" for r in rows))  # manual job kept
 
 
 class TestAutoSyncStartup(unittest.TestCase):

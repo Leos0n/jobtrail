@@ -55,7 +55,7 @@ def configured() -> bool:
     return gauth.is_connected(TOKEN) and bool(cfg.get("spreadsheet_url")) and bool(cfg.get("tabs"))
 
 
-def sync_now(db_path) -> dict:
+def sync_now(db_path, reset=False) -> dict:
     if not gauth.is_connected(TOKEN):
         return {"ok": False, "reason": "not connected"}
     cfg = _config()
@@ -68,9 +68,11 @@ def sync_now(db_path) -> dict:
         sid = gsheets.spreadsheet_id(cfg["spreadsheet_url"])
         jobs = []
         for tab in cfg["tabs"]:
-            values = gsheets.read_tab(sid, tab, token)
-            jobs.extend(sheets_map.values_to_jobs(values, default_status=cfg.get("default_status"), tab=tab)["jobs"])
+            values, links = gsheets.read_tab_with_links(sid, tab, token)
+            jobs.extend(sheets_map.values_to_jobs(
+                values, default_status=cfg.get("default_status"), tab=tab, links=links)["jobs"])
         db = Database(str(db_path))
+        removed = db.delete_by_source("google-sheet") if reset else 0
         result = db.import_jobs(jobs)
         db.close()
     except Exception as exc:
@@ -89,7 +91,8 @@ def sync_now(db_path) -> dict:
         "last_error": None,
     })
     _save_config(cfg)
-    return {"ok": True, "added": result["added"], "skipped": result["skipped"], "total": len(jobs)}
+    return {"ok": True, "added": result["added"], "skipped": result["skipped"],
+            "removed": removed, "total": len(jobs)}
 
 
 class AutoSync:

@@ -224,12 +224,22 @@ class Database:
 
     def import_jobs(self, jobs: list[dict]) -> dict:
         """Merge exported jobs in. Inserts missing ones; never overwrites or
-        deletes existing data. Matches on job_key, then url."""
+        deletes existing data.
+
+        Identity is the job_key when present (so two distinct roles that share
+        an apply link — e.g. one company careers page for several openings —
+        stay separate); only keyless rows fall back to url matching."""
         cols = [r[1] for r in self.conn.execute("PRAGMA table_info(jobs)")]
         importable = [c for c in cols if c != "id"]
         added = skipped = 0
         for job in jobs:
-            existing = self.find_by_key(job.get("url", ""), job.get("job_key"))
+            key = job.get("job_key")
+            if key:
+                existing = self.conn.execute(
+                    "SELECT 1 FROM jobs WHERE job_key = ?", [key]
+                ).fetchone()
+            else:
+                existing = self.find_by_key(job.get("url", ""), None)
             if existing:
                 skipped += 1
                 continue
@@ -245,6 +255,17 @@ class Database:
         self.conn.commit()
         self.dirty = True
         return {"added": added, "skipped": skipped}
+
+    def delete_by_source(self, source: str) -> int:
+        """Hard-delete every job with the given source (e.g. 'google-sheet').
+
+        Used for a clean re-import: because import is insert-only, rows left by
+        older syncs accumulate; clearing them first makes counts exact again.
+        Only touches that source, so manually added jobs are untouched."""
+        cur = self.conn.execute("DELETE FROM jobs WHERE source = ?", [source])
+        self.conn.commit()
+        self.dirty = True
+        return cur.rowcount
 
     def close(self):
         self.conn.close()
