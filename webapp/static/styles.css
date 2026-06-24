@@ -269,6 +269,15 @@ body {
 .cal-listview .li-row:first-child { border-top: none; }
 .cal-listview .li-date { width: 120px; color: var(--muted); font-size: 13.5px; flex: none; }
 .cal-dayview .day-summary { font-size: 13px; color: var(--muted); margin-bottom: 14px; }
+.day-sessions { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 18px; }
+.sess-card { flex: 1; min-width: 180px; background: var(--surface-2); border: 1px solid var(--hairline); border-radius: var(--r-md); padding: 12px 14px; }
+.sess-head { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 4px; }
+.sess-name { font-weight: 600; font-size: 13.5px; color: var(--ink); }
+.sess-count { font-size: 12px; color: var(--muted); background: var(--surface); border-radius: 999px; padding: 1px 9px; }
+.sess-time { font-size: 13px; color: var(--ink); }
+.sess-time .sess-span { color: var(--faint); margin-left: 8px; }
+.sess-stats { display: flex; gap: 14px; margin-top: 8px; font-size: 12px; color: var(--muted); }
+.sess-stats .sess-gap.distracted { color: var(--accent); font-weight: 600; }
 .cal-dayview .day-job-row {
   display: flex; align-items: center; gap: 12px; width: 100%; text-align: left;
   background: var(--surface); border: 1px solid var(--hairline); border-radius: var(--r-md);

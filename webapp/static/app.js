@@ -247,12 +247,53 @@ function weekGrid() {
   return html + "</div>";
 }
 
+function minsFromApplied(s) {
+  const m = /T(\d{2}):(\d{2})/.exec(s || "");
+  return m ? (+m[1]) * 60 + (+m[2]) : null;
+}
+function fmtClock(mins) {
+  const ap = mins >= 720 ? "pm" : "am";
+  let h = Math.floor(mins / 60) % 12; if (h === 0) h = 12;
+  return `${h}:${String(mins % 60).padStart(2, "0")}${ap}`;
+}
+// Group a day's jobs into the (START)/(END) apply blocks recorded on import.
+function daySessions(jobs) {
+  const groups = {};
+  for (const j of jobs) {
+    if (!j.session) continue;
+    const t = minsFromApplied(j.date_applied);
+    if (t == null) continue;
+    (groups[j.session] = groups[j.session] || []).push(t);
+  }
+  const out = Object.values(groups).map((mins) => {
+    mins.sort((a, b) => a - b);
+    const gaps = mins.slice(1).map((m, i) => m - mins[i]);
+    return {
+      count: mins.length, start: mins[0], end: mins[mins.length - 1],
+      span: mins[mins.length - 1] - mins[0],
+      avgGap: gaps.length ? gaps.reduce((a, b) => a + b, 0) / gaps.length : 0,
+      maxGap: gaps.length ? Math.max(...gaps) : 0,
+    };
+  });
+  return out.sort((a, b) => a.start - b.start);
+}
+
 function dayView(day) {
   const jobs = jobsAppliedOn(day);
   if (!jobs.length) {
     return `<div class="empty"><p class="empty-title">No applications</p><p class="muted">Nothing applied on ${esc(fmtDayLong(day))}.</p></div>`;
   }
-  return `<div class="cal-dayview"><div class="day-summary">${jobs.length} application${jobs.length === 1 ? "" : "s"}</div>` +
+  const sess = daySessions(jobs);
+  const sessHtml = sess.length ? `<div class="day-sessions">` + sess.map((s, i) => {
+    const distracted = s.maxGap >= 15 ? " distracted" : "";
+    return `<div class="sess-card"><div class="sess-head"><span class="sess-name">Block ${i + 1}</span><span class="sess-count">${s.count} app${s.count === 1 ? "" : "s"}</span></div>` +
+      `<div class="sess-time">${fmtClock(s.start)}–${fmtClock(s.end)}<span class="sess-span">${s.span} min</span></div>` +
+      (s.count > 1 ? `<div class="sess-stats"><span title="Average minutes between applications — lower is steadier">pace ${s.avgGap.toFixed(1)}m</span><span class="sess-gap${distracted}" title="Longest gap between applications — a proxy for distraction">longest gap ${s.maxGap}m</span></div>` : "") +
+      `</div>`;
+  }).join("") + `</div>` : "";
+  const summary = `${jobs.length} application${jobs.length === 1 ? "" : "s"}` +
+    (sess.length ? ` · ${sess.length} session${sess.length === 1 ? "" : "s"}` : "");
+  return `<div class="cal-dayview"><div class="day-summary">${summary}</div>` + sessHtml +
     jobs.map((j) => `<button type="button" class="day-job-row" data-job="${j.id}">${favBadge(j)}<span class="job-main"><span class="job-title">${esc(j.title || "Untitled role")}</span><span class="job-meta">${esc(j.company || srcLabel(j.source))}<span class="sep">·</span><span class="st st-${j.status}">${cap(j.status)}</span></span></span><span class="chev">${svg("chev", 18)}</span></button>`).join("") +
     "</div>";
 }
