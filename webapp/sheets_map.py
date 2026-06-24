@@ -231,7 +231,7 @@ def _values_to_jobs_grouped(values, tab, default_status, links=None):
     tagged (START)/(END) brackets a focused apply session; jobs get an ISO
     ``date_applied`` carrying the time and a ``session`` label for that block."""
     jobs, cur_date, cur_year = [], None, None
-    session_idx, active_session = 0, None
+    session_idx, active_session, day_seq = 0, None, 0
     for ri, row in enumerate(values):
         cells = [_cell(c).strip() for c in row]
         if not any(cells):
@@ -241,7 +241,7 @@ def _values_to_jobs_grouped(values, tab, default_status, links=None):
             if ym:
                 cur_year = ym.group(1)
             cur_date = parse_header_date(cells[0], default_year=cur_year)
-            session_idx, active_session = 0, None  # sessions reset each day
+            session_idx, active_session, day_seq = 0, None, 0  # reset each day
             continue
         company = cells[0]
         if not company:
@@ -282,7 +282,13 @@ def _values_to_jobs_grouped(values, tab, default_status, links=None):
             "session": session_label,
             "url": url,
         }
-        job["job_key"] = _job_key(url, company, title, f"{tab}|{cur_date}")
+        # Each row is a distinct logged application — two applications to the
+        # same posting (or a careers URL with no posting id) on the same day
+        # must stay separate, so counts match the sheet. The per-day ordinal
+        # keeps them distinct while a re-sync of the unchanged sheet yields the
+        # same ordinals (idempotent — no duplicates on plain `sync`).
+        day_seq += 1
+        job["job_key"] = f"{_job_key(url, company, title, f'{tab}|{cur_date}')}-{day_seq}"
         if not job["url"]:
             job["url"] = f"gsheet://{job['job_key']}"
         jobs.append({k: v for k, v in job.items() if v is not None})

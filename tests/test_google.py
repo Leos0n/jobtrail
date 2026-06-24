@@ -405,6 +405,28 @@ class TestGroupedTimeSessions(unittest.TestCase):
         self.assertEqual((s2["count"], s2["start"], s2["end"]), (9, "13:45", "14:55"))
         self.assertGreater(s2["longest_gap_min"], 0)
 
+    def test_repeat_application_stays_distinct(self):
+        """Each logged application is its own record. The same posting (or a
+        non-posting careers URL) submitted twice in a day must NOT collapse, so
+        DB counts match the sheet — while a re-sync of the same sheet is still
+        idempotent (no duplicates)."""
+        from webapp.db import Database
+        rows = [["June 22nd, 2026 (3 Jobs)", "", "", "", ""],
+                ["Acme", "Eng", "CA", "https://indeed.com/viewjob?jk=aaa", "1218pm"],
+                ["Acme", "Eng", "CA", "https://indeed.com/viewjob?jk=aaa", "1242pm"],
+                ["Crux", "Dev", "CA", "https://co.com/careers/x", "105pm"],
+                ["June 21st, 2026 (0 Jobs)", "", "", "", ""]]
+        jobs = sheets_map.values_to_jobs(rows, tab="A")["jobs"]
+        self.assertEqual(len(jobs), 3)
+        self.assertEqual(len({j["job_key"] for j in jobs}), 3)  # all distinct
+
+        db = Database(":memory:")
+        db.import_jobs(jobs)
+        self.assertEqual(len(db.list_jobs()), 3)                # match the sheet
+        db.import_jobs(sheets_map.values_to_jobs(rows, tab="A")["jobs"])
+        self.assertEqual(len(db.list_jobs()), 3)                # re-sync idempotent
+        db.close()
+
 
 class TestAutoSyncStartup(unittest.TestCase):
     """AutoSync should sync shortly after startup, not after a full interval."""
