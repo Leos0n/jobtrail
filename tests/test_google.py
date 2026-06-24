@@ -353,6 +353,59 @@ class TestTimestampNormalize(unittest.TestCase):
             self.assertEqual(sheets_map.normalize_date(raw), want, raw)
 
 
+class TestClockParsing(unittest.TestCase):
+    def test_formats(self):
+        from webapp import sheets_map as sm
+        self.assertEqual(sm.parse_clock("1218pm"), ("12:18", None))
+        self.assertEqual(sm.parse_clock("102pm"), ("13:02", None))
+        self.assertEqual(sm.parse_clock("115pm (END)"), ("13:15", "end"))
+        self.assertEqual(sm.parse_clock("1218pm (START)"), ("12:18", "start"))
+        self.assertEqual(sm.parse_clock("905am"), ("09:05", None))
+        self.assertEqual(sm.parse_clock("1200am"), ("00:00", None))
+        self.assertIsNone(sm.parse_clock("Apple Valley, CA"))
+        self.assertIsNone(sm.parse_clock(""))
+
+
+class TestGroupedTimeSessions(unittest.TestCase):
+    """Date from the header, time from column E, (START)/(END) -> sessions."""
+
+    def _day(self):
+        times = ["1218pm (START)", "1220pm", "1225pm", "1230pm", "1233pm",
+                 "1240pm", "1245pm", "1250pm", "1253pm", "102pm", "105pm",
+                 "110pm", "115pm (END)", "145pm (START)", "155pm", "200pm",
+                 "205pm", "217pm", "227pm", "231pm", "235pm", "255pm (END)"]
+        rows = [["June 22nd, 2026 (22 Jobs)", "", "", "", ""],
+                ["June 23rd, 2026 (0 Jobs)", "", "", "", ""]]  # 2nd header -> grouped
+        # put the 22 real rows under the first header
+        body = [[f"Co{i}", f"Role {i}", "Ontario, CA", f"https://x.io/{i}", t]
+                for i, t in enumerate(times)]
+        return rows[:1] + body + rows[1:]
+
+    def test_time_in_date_and_sessions(self):
+        res = sheets_map.values_to_jobs(self._day(), tab="A")
+        jobs = res["jobs"]
+        self.assertEqual(len(jobs), 22)
+        # first job: 12:18 on the header date, session #1
+        self.assertEqual(jobs[0]["date_applied"], "2026-06-22T12:18:00")
+        self.assertEqual(jobs[0]["session"], "2026-06-22 #1")
+        # the 14th app starts the second block at 1:45pm
+        self.assertEqual(jobs[13]["date_applied"], "2026-06-22T13:45:00")
+        self.assertEqual(jobs[13]["session"], "2026-06-22 #2")
+        # all on the same calendar day (counts stay by-day)
+        days = {j["date_applied"][:10] for j in jobs}
+        self.assertEqual(days, {"2026-06-22"})
+
+    def test_session_summary(self):
+        from webapp import sessions
+        jobs = sheets_map.values_to_jobs(self._day(), tab="A")["jobs"]
+        summ = sessions.summarize(jobs)
+        self.assertEqual(len(summ), 2)
+        s1, s2 = summ
+        self.assertEqual((s1["count"], s1["start"], s1["end"]), (13, "12:18", "13:15"))
+        self.assertEqual((s2["count"], s2["start"], s2["end"]), (9, "13:45", "14:55"))
+        self.assertGreater(s2["longest_gap_min"], 0)
+
+
 class TestAutoSyncStartup(unittest.TestCase):
     """AutoSync should sync shortly after startup, not after a full interval."""
 

@@ -66,6 +66,11 @@ From the JobTrail directory:
   read by column position — `A` company, `B` job/title, `C` location, `D` url,
   `E` date / time submitted. "Time submitted" timestamps (e.g. `6/22/2026 9:05
   AM`) are accepted and reduced to the application date.
+- **Apply sessions:** in the date-grouped layout, column `E` can hold the
+  submission *time* (`1218pm`, `102pm`). Tag a cell `(START)` / `(END)` to
+  bracket a focused apply block; the importer records each application's time
+  and a session label, and `./bin/jobtrail-sheet-debug` reports per-session
+  consistency (average pace) and distraction (longest gap between submissions).
 - **Idempotent:** re-running only adds new rows; it never duplicates or
   overwrites edits you've made inside JobTrail.
 

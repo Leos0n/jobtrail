@@ -203,10 +203,35 @@ def looks_grouped(values):
     return sum(1 for r in values if r and DATE_HEADER_RE.match(_cell(r[0]).strip())) >= 2
 
 
+# Compact clock value like "1218pm", "102pm", optionally tagged "(START)"/"(END)"
+# to bracket a focused apply session. Minutes are the last two digits.
+_CLOCK_RE = re.compile(
+    r"^\s*(\d{1,2})(\d{2})\s*([ap])\.?\s*m\.?\s*\(?\s*(start|end)?\s*\)?\s*$", re.I)
+
+
+def parse_clock(cell):
+    """Parse a compact clock value. Returns ``(hh:mm 24-hour, marker)`` where
+    marker is 'start', 'end', or None — or None if the cell isn't a clock."""
+    m = _CLOCK_RE.match(str(cell or ""))
+    if not m:
+        return None
+    hour, minute = int(m.group(1)), int(m.group(2))
+    if not (1 <= hour <= 12 and minute <= 59):
+        return None
+    if m.group(3).lower() == "p" and hour != 12:
+        hour += 12
+    elif m.group(3).lower() == "a" and hour == 12:
+        hour = 0
+    return f"{hour:02d}:{minute:02d}", (m.group(4) or "").lower() or None
+
+
 def _values_to_jobs_grouped(values, tab, default_status, links=None):
     """Parse the date-grouped layout: a date header row, then one job per row
-    (Company, Role, Location?, Link?, Status?), repeating per day."""
+    (Company, Role, Location?, Link?, Time?), repeating per day. A time cell
+    tagged (START)/(END) brackets a focused apply session; jobs get an ISO
+    ``date_applied`` carrying the time and a ``session`` label for that block."""
     jobs, cur_date, cur_year = [], None, None
+    session_idx, active_session = 0, None
     for ri, row in enumerate(values):
         cells = [_cell(c).strip() for c in row]
         if not any(cells):
@@ -216,17 +241,21 @@ def _values_to_jobs_grouped(values, tab, default_status, links=None):
             if ym:
                 cur_year = ym.group(1)
             cur_date = parse_header_date(cells[0], default_year=cur_year)
+            session_idx, active_session = 0, None  # sessions reset each day
             continue
         company = cells[0]
         if not company:
             continue
         title = cells[1] if len(cells) > 1 and cells[1] else None
         url = location = status = None
+        clock = marker = None
         for c in cells[2:]:
             if not c:
                 continue
             if c.lower().startswith("http"):
                 url = c
+            elif clock is None and parse_clock(c):
+                clock, marker = parse_clock(c)
             elif match_status(c):
                 status = match_status(c)
             elif location is None:
@@ -235,13 +264,22 @@ def _values_to_jobs_grouped(values, tab, default_status, links=None):
         # which plain values can't see — recover it from the link grid.
         if not url:
             url = _row_link(links, ri)
+        # Session bracketing: a (START) opens a new block, (END) closes it.
+        if marker == "start":
+            session_idx += 1
+            active_session = f"{cur_date} #{session_idx}" if cur_date else None
+        session_label = active_session
+        if marker == "end":
+            active_session = None
+        date_applied = f"{cur_date}T{clock}:00" if (cur_date and clock) else cur_date
         job = {
             "source": "google-sheet",
             "company": company,
             "title": title,
             "location": location,
             "status": status or default_status or "applied",
-            "date_applied": cur_date,
+            "date_applied": date_applied,
+            "session": session_label,
             "url": url,
         }
         job["job_key"] = _job_key(url, company, title, f"{tab}|{cur_date}")

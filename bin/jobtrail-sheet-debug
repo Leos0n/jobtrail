@@ -16,7 +16,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from webapp import gauth, gsheets, gsync, sheets_map  # noqa: E402
+from webapp import gauth, gsheets, gsync, sessions, sheets_map  # noqa: E402
 from webapp.db import Database  # noqa: E402
 
 DB_PATH = ROOT / "data" / "jobs.db"
@@ -60,11 +60,13 @@ def main() -> int:
 
     grand_parsed = grand_new = grand_links = 0
     parsed_by_day = {}
+    all_parsed = []
     for tab in cfg["tabs"]:
         values, links = gsheets.read_tab_with_links(sid, tab, token)
         res = sheets_map.values_to_jobs(
             values, default_status=cfg.get("default_status"), tab=tab, links=links)
         jobs = res["jobs"]
+        all_parsed.extend(jobs)
         layout = res.get("mapping", {}).get("layout", "table")
         new = [j for j in jobs if not already(j)]
         with_link = [j for j in jobs if (j.get("url") or "").startswith("http")]
@@ -100,6 +102,11 @@ def main() -> int:
             print(f"    {d}: DB has {indb}, sheet says {insheet}")
         print("  Fix with a one-time clean re-import (backs up first):")
         print("    ./bin/jobtrail-google sync --reset\n")
+
+    summaries = sessions.summarize(all_parsed)
+    if summaries:
+        print(sessions.format_text(summaries))
+        print()
 
     db.close()
     print(f"TOTAL: parsed={grand_parsed}  new={grand_new}  with-real-links={grand_links}")

@@ -64,6 +64,7 @@ CREATE TABLE IF NOT EXISTS jobs (
 # Columns added after the first release — applied as idempotent migrations.
 _MIGRATIONS = {
     "deleted_at": "ALTER TABLE jobs ADD COLUMN deleted_at TEXT",
+    "session": "ALTER TABLE jobs ADD COLUMN session TEXT",
 }
 
 
